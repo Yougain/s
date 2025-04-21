@@ -57,6 +57,7 @@ def set_ssh_agent_params retry_item
         ssh_agent_pid = File.read("#{SAgentParams}/ssh_agent_pid").strip
         retry_item = :new
     else
+      STDERR.write "asdfsdfsa\n"
         IO.popen %W{ssh-agent -s} do |io|
             io.each_line do |line|
                 if line =~ /SSH_AUTH_SOCK=(.*?)(;|$)/

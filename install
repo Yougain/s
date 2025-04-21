@@ -1,0 +1,17 @@
+#!/bin/bash
+
+if [ "`id -u`" -ne 0 ]; then
+    exec sudo "$0" "$@"
+fi
+ln -sf /var/lib/git_project/s/winInputBox /usr/bin/winInputBox
+
+if [ -e "/usr/bin/ssh.org" ]; then
+    echo "ERROR: /usr/bin/ssh.org found. Stop installing."
+    exit 1
+fi
+
+mv /usr/bin/ssh /usr/bin/ssh.org
+ln -sf /var/lib/git_project/s/ssha2 /usr/bin/ssh
+
+
+

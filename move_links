@@ -1,0 +1,45 @@
+#!/bin/env ruby
+
+require 'set'
+
+def process_directory(directory, seen_inodes = Set.new)
+  Dir.foreach(directory) do |entry|
+    next if entry == '.' || entry == '..' # カレントディレクトリと親ディレクトリをスキップ
+
+    path = File.join(directory, entry)
+
+    if !File.symlink?(path)
+        if File.directory?(path)
+            # ディレクトリの場合、inodeとdevを取得して重複をチェック
+            stat = File.lstat(path)
+            inode_dev = [stat.dev, stat.ino]
+
+            unless seen_inodes.include?(inode_dev)
+                seen_inodes.add(inode_dev)
+                process_directory(path, seen_inodes) # 再帰的に処理
+            end
+        end
+    else
+        stat = File.lstat(path)
+        inode_dev = [stat.dev, stat.ino]
+
+        unless seen_inodes.include?(inode_dev)
+            seen_inodes.add(inode_dev)
+            # シンボリックリンクの場合、リンク先を表示
+            target = File.readlink(path)
+            if target =~ /^\/home\/yougain\/git_project\//
+                rel = $'
+                puts "#{path} -> #{target}"
+                File.delete(path) # シンボリックリンクを削除
+                File.symlink("/var/lib/git_project/#{rel}", path)
+            end
+        end
+    end
+  end
+rescue Errno::EACCES => p
+    print "#{p}\n"
+    # アクセス権限がない場合は無視
+end
+
+process_directory "/"
+

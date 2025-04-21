@@ -1,0 +1,383 @@
+#!/bin/env ruby
+require 'shellwords'
+require 'fileutils'
+require 'open3'
+require  'time'
+require 'pty'
+
+def get_session_id(sid)
+    output = `ps -eo pid,sid,lstart --no-headers`.lines
+    output.each do |line|
+      fields = line.split
+      pid = fields[0].to_i
+      session_id = fields[1].to_i
+      start_time = fields[2..-1].join(" ")
+      st = Time.parse(start_time)
+  
+      if session_id == sid
+        return "#{pid}-#{st.to_i}"
+      end
+    end
+    nil
+end
+
+Sid = Process.getsid(0) # 現在のセッションIDを取得
+This_session = get_session_id(Sid)
+
+def get_system_boot_time
+    uptime_seconds = File.read("/proc/uptime").split[0].to_f rescue 0
+    boot_time = Time.now - uptime_seconds
+    boot_time
+end
+
+boot_time = get_system_boot_time
+Prog = File.basename($0)
+
+BootTimes = "#{ENV['HOME']}/.tmp/.#{Prog}/boot_times"
+Dir.glob("#{BootTimes}/*").each do |d|
+    t = File.basename(d).to_i
+    if t < boot_time.to_i - 10
+        FileUtils.rm_rf d
+    elsif t < boot_time.to_i - 10
+        boot_time = t
+        break
+    end
+end
+
+Boot_time = boot_time
+SAgentParams = "#{BootTimes}/#{Boot_time.to_i}/sessions/#{This_session}/ssh-agent-params"
+
+class Err < StandardError; end
+
+def set_ssh_agent_params retry_item
+    ssh_auth_sock = nil
+    ssh_agent_pid = nil
+    if retry_item == :previous && File.exist?("#{SAgentParams}/ssh_auth_sock") && File.exist?("#{SAgentParams}/ssh_agent_pid")
+        ssh_auth_sock = File.read("#{SAgentParams}/ssh_auth_sock").strip
+        ssh_agent_pid = File.read("#{SAgentParams}/ssh_agent_pid").strip
+        retry_item = :new
+    else
+        IO.popen %W{ssh-agent -s} do |io|
+            io.each_line do |line|
+                if line =~ /SSH_AUTH_SOCK=(.*?)(;|$)/
+                    ssh_auth_sock = $1
+                end
+                if line =~ /SSH_AGENT_PID=(.*?)(;|$)/
+                    ssh_agent_pid = $1
+                end
+            end
+        end
+        if !ssh_auth_sock || !ssh_agent_pid
+            STDERR.puts "ERROR: cannot start ssh-agent."
+            exit 1
+        end
+        FileUtils.mkdir_p SAgentParams
+        File.write("#{SAgentParams}/ssh_auth_sock", ssh_auth_sock)
+        File.write("#{SAgentParams}/ssh_agent_pid", ssh_agent_pid)
+        retry_item = nil
+    end
+    ENV['SSH_AUTH_SOCK'] = ssh_auth_sock
+    ENV['SSH_AGENT_PID'] = ssh_agent_pid
+    retry_item
+end
+
+def getKeyListInSSHAgent
+    keylist = []
+    retry_item = :previous
+    begin
+        IO.popen %W{ssh-add -l}, err: [:child, :out] do |io|
+            io.each_line do |line|
+                case line
+                when /Could not open a connection to your authentication agent/
+                    raise Err.new(line)
+                when /Error connecting to agent: No such file or directory/
+                    raise Err.new(line)
+                end
+                keylist.push line.chomp!
+            end
+        end
+    rescue Err => e
+        if retry_item.nil?
+            STDERR.puts "ERROR: Cannot start ssh-agent (#{e.message})."
+            exit 1
+        end
+        retry_item = set_ssh_agent_params retry_item
+        retry
+    end
+    keylist
+end
+                
+
+
+SessionDir = "#{ENV['HOME']}/.tmp/.#{Prog}/sessions/#{Boot_time}/#{This_session}"
+FileUtils.mkdir_p SessionDir
+SAgentSource = SessionDir + "/ssh-agent-source"
+
+def get_login_shell_from_passwd(username)
+    begin
+      File.foreach('/data/data/com.termux/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/etc/passwd') do |line|
+        fields = line.split(':')
+        if fields[0] == username
+          return fields[6].strip # ログインシェルのフィールドを返す
+        end
+      end
+      nil # ユーザーが見つからない場合
+    rescue Errno::ENOENT
+      nil # /etc/passwdが存在しない場合
+    end
+end
+
+
+class IO
+    def set_writer(w)
+        @writer = w
+        @buffers = []
+        @mutex = Mutex.new
+        @condition = ConditionVariable.new
+    end
+
+    def transfer
+        if @writer
+            @mutex.synchronize do
+                begin
+                    @buffers.push readpartial(1024)
+                rescue EOFError
+                    @buffers.push nil
+                    @eof = true
+                end
+                @condition.signal # バッファに要素が追加されたことを通知
+            end
+            @thread ||= Thread.new do
+                catch :exit do
+                    loop do
+                        data = nil
+                        @mutex.synchronize do
+                            while @buffers.empty?
+                                @condition.wait(@mutex) # バッファに要素が追加されるまで待機
+                            end
+                            data = @buffers.shift
+                            if data.nil?
+                                throw :exit
+                            end                            
+                        end
+                        check_line data
+                        @writer.write data
+                        @writer.flush
+                    end
+                end
+            end
+        end
+    end
+    def check_line data
+    end
+    def eof?
+        @eof
+    end
+    def join
+        @thread.join if @thread
+    end
+end
+
+def running_in_wsl?
+    File.read("/proc/version").include?("Microsoft") rescue false
+end
+
+IN_WSL = running_in_wsl?
+  
+    
+case ARGV[0]
+when /^\-\-server$/
+    ARGV.shift
+    user = ARGV.shift
+    if ARGV.empty?
+        s = get_login_shell_from_passwd user
+        if s
+            ARGV << s
+            ARGV << "-i"
+        else
+            ARGV << "bash"
+            ARGV << "-i"
+        end
+    end
+    inserter = %W{proot-distro login ubuntu --no-arch-warning --bind /dev/null:/etc/mtab --user #{user} --}
+    cmd = [*inserter, *ARGV]
+    if STDIN.tty?
+        exec *cmd
+    else
+        Open3.popen3 *cmd do |stdin, stdout, stderr, wait_thr|
+            def stderr.check_line data
+                !data.gsub! /^proot warning:.*?\n/, ""
+            end
+            stdin.set_encoding("ASCII-8BIT")
+            stdout.set_encoding("ASCII-8BIT")
+            stderr.set_encoding("ASCII-8BIT")
+            stdin.sync = true
+            stdout.sync = true
+            stderr.sync = true
+            STDIN.set_writer stdin
+            stdout.set_writer STDOUT
+            stderr.set_writer STDERR
+            rarr = []
+            loop do
+                rarr.push stdout if !stdout.eof?
+                rarr.push stderr if !stderr.eof?
+                rarr.push STDIN
+                break if rarr == [STDIN]
+                rs, = IO.select(rarr)
+                rs.each do |r|
+                    r.transfer
+                end
+                rarr.clear
+            end
+            [stdout, stderr].each do |f|
+                f.join
+            end
+        end
+    end
+else
+    nextIsOptArg = false
+    dest = nil
+    cmdarr = []
+    cmdpos = nil
+    terminal = false
+    inserter = %W{proot-distro login ubuntu --bind /dev/null:/etc/mtab -- su #{ENV['USER']} -c}
+    curOpt = nil
+    optArg = {}    
+
+    ARGV.each_with_index do |arg, i|
+        if cmdarr.empty?
+            if nextIsOptArg
+                nextIsOptArg = false
+                optArg[curOpt] = arg
+                next
+            end
+            # 先頭が-の引数はオプション引数とみなす
+            if arg =~ /^\-/
+                curOpt = nil
+                $'.each_char do |c|
+                    if curOpt.nil?
+                        case c
+                        when /^[46AaCfGgKkMNnqsTVvXxYy]$/
+                        when "t"
+                            terminal = true
+                        when /^[BbcDEeFIiJLlmOoPpRSWw]$/
+                            optArg[curOpt = $&] = ""
+                        end
+                    else
+                        optArg[curOpt] += c
+                    end
+                end
+                if optArg[curOpt] == ""
+                    nextIsOptArg = true
+                end
+            elsif !dest
+                dest = arg
+            else
+                cmdpos = i
+                cmdarr << arg        
+            end
+        else
+            cmdarr << arg
+        end
+    end
+
+    if !cmdpos
+        cmdarr = []
+        sshc = ["-t", *ARGV]
+        sshcg = sshc
+        terminal = true
+    else
+        sshc = ARGV[0...cmdpos]
+    end
+
+    user = nil
+    idFileList = []
+    
+    IO.popen "echo 1 |SSH_ASKPASS=\"\" " + [*%W{ssh.org -G}, *sshc].shelljoin + " 2>/dev/null" do |io|
+        io.each_line do |line|
+            #STDERR.write line.inspect
+            case line
+            when /^user /
+                user = $'.strip
+            when /^identityfile /
+                idFileList.push File.expand_path($'.strip)
+            end
+        end
+    end
+    
+    if !user
+        STDERR.puts "ERROR: user not found"
+        exit 1
+    end
+
+
+
+    added = getKeyListInSSHAgent
+
+    def key_has_passphrase?(key_path)
+        output = nil
+        IO.popen(["ssh-keygen", "-y", "-f", key_path], err: [:child, :out]) do |io|
+          output = io.read
+        end
+        output.include?("Enter passphrase")
+    end
+    
+    catch :key_available do
+        idFileList.each do |idf|
+            if File.exist? idf
+                #if key_has_passphrase? idf
+                    finger = nil
+                    IO.popen [*%W{ssh-keygen -lf}, idf] do |io|
+                        finger = io.read.strip
+                    end
+                    if !added.include? finger
+                        errExit = proc do
+                            STDERR.puts "ERROR: #{idf} not added to ssh-agent"
+                            STDERR.puts "Please add it with ssh-add #{idf}"
+                            exit 1
+                        end
+                        if STDIN.tty?
+                            if !system "ssh-add", idf
+                                errExit.call
+                            end
+                        elsif !`which winInputBox 2> /dev/null`.strip.empty?
+                            phrase = `winInputBox Input passphrase for #{idf} < /dev/null`.chomp!
+                            PTY.spawn "ssh-add", idf do |r, w, pid|
+                                loop do
+                                    ra, = select [r]
+                                    buff = r.readpartial(1024) rescue break
+                                    case buff
+                                    when /Enter passphrase for .*:/
+                                        w.write phrase + "\r\n"
+                                        w.flush
+                                    when /Bad passphrase/
+                                        Process.kill :TERM, pid
+                                        errExit.call
+                                    end
+                                end
+                            end
+                        else
+                            STDERR.puts "ERROR: passphrase required for #{idf}"
+                            STDERR.puts "Please add it with ssh-add #{idf}, before running #{Prog}"
+                            exit 1                        
+                        end
+                    end
+                #end
+                throw :key_available, :key_available
+            end
+        end
+    end == :key_available or (STDERR.puts "ERROR: no key available"; exit 1)
+
+    if IN_WSL && !`which winInputBox 2> /dev/null`.strip.empty?
+        ENV['SSH_ASKPASS'] = `which winInputBox 2> /dev/null`.strip
+    end
+
+    if File.exist? "#{ENV['HOME']}/.sshu/hosts/#{dest}"
+        #p ["ssh", *sshc, Prog, "--server", user, *cmdarr] 
+        exec "ssh.org", *sshc, "ssha2", "--server", user, *cmdarr
+    else
+        exec "ssh.org", *ARGV
+    end
+
+end
+

@@ -3,27 +3,57 @@
 # VBScriptを使用して入力ダイアログを表示する
 
 # コマンドライン引数からタイトルとプロンプトを取得
+if ARGV[0] =~ /^\-\-/
+  cmd = ARGV.shift
+end
+
+callVBS = Proc.new do |code|
+  # 一時VBScriptファイルを作成
+  require 'tempfile'
+  vbs_file = Tempfile.new(['input_dialog', '.vbs'])
+  vbs_file.write(code)
+  vbs_file.close
+
+  # VBScriptを実行して結果を取得
+  wp = `wslpath -w #{vbs_file.path}`
+  result = `/mnt/c/windows/system32/cscript.exe //nologo '#{wp.chomp}'`
+
+  # 一時ファイルを削除
+  vbs_file.unlink
+
+  # 結果を出力
+  result.strip
+end
+
+
 title = ARGV.join(" ")
 prompt = ""
 default_value = ""
 
-# 一時VBScriptファイルを作成
-require 'tempfile'
-vbs_file = Tempfile.new(['input_dialog', '.vbs'])
-vbs_file.write(<<-VBS)
-  Dim result
-  result = InputBox("#{prompt}", "#{title}", "#{default_value}")
-  WScript.Echo result
-VBS
-vbs_file.close
 
-
-# VBScriptを実行して結果を取得
-wp = `wslpath -w #{vbs_file.path}`
-result = `/mnt/c/windows/system32/cscript.exe //nologo '#{wp.chomp}'`
-
-# 一時ファイルを削除
-vbs_file.unlink
-
-# 結果を出力
-puts result.strip + "\n"
+case cmd
+when nil
+  result = callVBS.call <<-VBS
+    Dim result
+    result = InputBox("#{prompt}", "#{title}", "#{default_value}")
+    WScript.Echo result
+  VBS
+  puts result
+when "--confirm"
+  result = callVBS.call <<-VBS
+    Dim result
+    result = MsgBox("#{title}", vbYesNo + vbQuestion, "#{title}")
+    WScript.Echo result
+  VBS
+  if result == "6" # vbYes
+    exit 0
+  else
+    exit 1
+  end
+when "--message"
+  callVBS.call <<-VBS
+    Dim result
+    result = MsgBox("#{title}", vbInformation, "#{title}")
+  VBS
+  exit 0
+end

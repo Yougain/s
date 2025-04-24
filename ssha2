@@ -4,6 +4,9 @@ require 'fileutils'
 require 'open3'
 require  'time'
 require 'pty'
+require 'io/console'
+#require 'Yk/debug2'
+require 'digest'
 
 def get_session_id(sid)
     output = `ps -eo pid,sid,lstart --no-headers`.lines
@@ -20,6 +23,9 @@ def get_session_id(sid)
     end
     nil
 end
+
+FileUtils.mkdir_p "#{ENV['HOME']}/.ssha
+FileUtils.chmod 0700, "#{ENV['HOME']}/.ssha"
 
 Sid = Process.getsid(0) # 現在のセッションIDを取得
 This_session = get_session_id(Sid)
@@ -57,7 +63,6 @@ def set_ssh_agent_params retry_item
         ssh_agent_pid = File.read("#{SAgentParams}/ssh_agent_pid").strip
         retry_item = :new
     else
-      STDERR.write "asdfsdfsa\n"
         IO.popen %W{ssh-agent -s} do |io|
             io.each_line do |line|
                 if line =~ /SSH_AUTH_SOCK=(.*?)(;|$)/
@@ -94,7 +99,7 @@ def getKeyListInSSHAgent
                 when /Error connecting to agent: No such file or directory/
                     raise Err.new(line)
                 end
-                keylist.push line.chomp!
+                keylist.push line.strip.split[1]
             end
         end
     rescue Err => e
@@ -106,6 +111,11 @@ def getKeyListInSSHAgent
         retry
     end
     keylist
+end
+
+def clearKeysInSSHAgent
+    keyList = getKeyListInSSHAgent
+    system("ssh-add -D") if !keyList.empty?
 end
                 
 
@@ -183,202 +193,620 @@ def running_in_wsl?
     File.read("/proc/version").include?("Microsoft") rescue false
 end
 
-IN_WSL = running_in_wsl?
-  
-    
-case ARGV[0]
-when /^\-\-server$/
-    ARGV.shift
-    user = ARGV.shift
-    if ARGV.empty?
-        s = get_login_shell_from_passwd user
-        if s
-            ARGV << s
-            ARGV << "-i"
-        else
-            ARGV << "bash"
-            ARGV << "-i"
-        end
-    end
-    inserter = %W{proot-distro login ubuntu --no-arch-warning --bind /dev/null:/etc/mtab --user #{user} --}
-    cmd = [*inserter, *ARGV]
-    if STDIN.tty?
-        exec *cmd
-    else
-        Open3.popen3 *cmd do |stdin, stdout, stderr, wait_thr|
-            def stderr.check_line data
-                !data.gsub! /^proot warning:.*?\n/, ""
-            end
-            stdin.set_encoding("ASCII-8BIT")
-            stdout.set_encoding("ASCII-8BIT")
-            stderr.set_encoding("ASCII-8BIT")
-            stdin.sync = true
-            stdout.sync = true
-            stderr.sync = true
-            STDIN.set_writer stdin
-            stdout.set_writer STDOUT
-            stderr.set_writer STDERR
-            rarr = []
-            loop do
-                rarr.push stdout if !stdout.eof?
-                rarr.push stderr if !stderr.eof?
-                rarr.push STDIN
-                break if rarr == [STDIN]
-                rs, = IO.select(rarr)
-                rs.each do |r|
-                    r.transfer
-                end
-                rarr.clear
-            end
-            [stdout, stderr].each do |f|
-                f.join
+def key_has_passphrase?(key_path)
+       output = ""
+    PTY.spawn "SSH_ASKPASS=\"\" " + ["ssh-keygen", "-y", "-f", key_path].shelljoin do |r, w, pid|
+        select [r]
+        out = r.readpartial(1024) rescue nil
+        if out
+            output << out if out
+            if out =~ /Enter passphrase for key/
+                w.write "\r\n"
+                w.flush
+                Process.kill :TERM, pid
             end
         end
     end
-else
-    nextIsOptArg = false
-    dest = nil
-    cmdarr = []
-    cmdpos = nil
-    terminal = false
-    inserter = %W{proot-distro login ubuntu --bind /dev/null:/etc/mtab -- su #{ENV['USER']} -c}
-    curOpt = nil
-    optArg = {}    
+    output.include?("Enter passphrase")
+end
 
-    ARGV.each_with_index do |arg, i|
-        if cmdarr.empty?
-            if nextIsOptArg
-                nextIsOptArg = false
-                optArg[curOpt] = arg
-                next
-            end
-            # 先頭が-の引数はオプション引数とみなす
-            if arg =~ /^\-/
-                curOpt = nil
-                $'.each_char do |c|
-                    if curOpt.nil?
-                        case c
-                        when /^[46AaCfGgKkMNnqsTVvXxYy]$/
-                        when "t"
-                            terminal = true
-                        when /^[BbcDEeFIiJLlmOoPpRSWw]$/
-                            optArg[curOpt = $&] = ""
-                        end
-                    else
-                        optArg[curOpt] += c
-                    end
-                end
-                if optArg[curOpt] == ""
-                    nextIsOptArg = true
-                end
-            elsif !dest
-                dest = arg
-            else
-                cmdpos = i
-                cmdarr << arg        
-            end
-        else
-            cmdarr << arg
-        end
-    end
+PassPhrase = ""
+IdFile = ""
 
-    if !cmdpos
-        cmdarr = []
-        sshc = ["-t", *ARGV]
-        sshcg = sshc
-        terminal = true
-    else
-        sshc = ARGV[0...cmdpos]
-    end
-
-    user = nil
-    idFileList = []
-    
-    IO.popen "echo 1 |SSH_ASKPASS=\"\" " + [*%W{ssh.org -G}, *sshc].shelljoin + " 2>/dev/null" do |io|
-        io.each_line do |line|
-            #STDERR.write line.inspect
-            case line
-            when /^user /
-                user = $'.strip
-            when /^identityfile /
-                idFileList.push File.expand_path($'.strip)
-            end
-        end
-    end
-    
-    if !user
-        STDERR.puts "ERROR: user not found"
+def createKey
+    if !system "SSH_ASKPASS=\"\" " + ["ssh-keygen", "-t", "ed25519", "-f", "#{ENV['HOME']}/.ssh/id_ed25519", "-N", PassPhrase].shelljoin
+        STDERR.puts "ERROR: cannot create key."
         exit 1
     end
+    IdFile.replace "#{ENV['HOME']}/.ssh/id_ed25519"
+end
 
-
-
-    added = getKeyListInSSHAgent
-
-    def key_has_passphrase?(key_path)
-        output = nil
-        IO.popen(["ssh-keygen", "-y", "-f", key_path], err: [:child, :out]) do |io|
-          output = io.read
+def userPrompt mode, msg = nil
+    case mode
+    when :yn
+        if STDIN.tty?
+            STDERR.print msg.chomp
+            STDERR.flush
+            ans = STDIN.gets.strip
+            return ans =~ /^(y|yes)$/i
+        else
+            return system "winInputBox --confirm Empty passphrase. Are you sure?"
         end
-        output.include?("Enter passphrase")
+    when String, :msg
+        if STDIN.tty?
+            STDERR.puts msg.chomp
+            STDERR.flush
+        else
+            system "winInputBox --message #{msg.chomp}"
+        end
+    when :password, :passwd, :input
+        if STDIN.tty?
+            STDERR.print msg.chomp
+            STDERR.flush
+            input = mode != :input ? STDIN.noecho(&:gets).chomp : STDIN.gets.chomp
+        else
+            input = `winInputBox #{msg.chomp}`.chomp
+        end
+        return input
     end
-    
-    catch :key_available do
-        idFileList.each do |idf|
-            if File.exist? idf
-                #if key_has_passphrase? idf
-                    finger = nil
-                    IO.popen [*%W{ssh-keygen -lf}, idf] do |io|
-                        finger = io.read.strip
-                    end
-                    if !added.include? finger
-                        errExit = proc do
-                            STDERR.puts "ERROR: #{idf} not added to ssh-agent"
-                            STDERR.puts "Please add it with ssh-add #{idf}"
-                            exit 1
-                        end
-                        if STDIN.tty?
-                            if !system "ssh-add", idf
-                                errExit.call
-                            end
-                        elsif !`which winInputBox 2> /dev/null`.strip.empty?
-                            phrase = `winInputBox Input passphrase for #{idf} < /dev/null`.chomp!
-                            PTY.spawn "ssh-add", idf do |r, w, pid|
-                                loop do
-                                    ra, = select [r]
-                                    buff = r.readpartial(1024) rescue break
-                                    case buff
-                                    when /Enter passphrase for .*:/
-                                        w.write phrase + "\r\n"
-                                        w.flush
-                                    when /Bad passphrase/
-                                        Process.kill :TERM, pid
-                                        errExit.call
-                                    end
-                                end
-                            end
-                        else
-                            STDERR.puts "ERROR: passphrase required for #{idf}"
-                            STDERR.puts "Please add it with ssh-add #{idf}, before running #{Prog}"
-                            exit 1                        
-                        end
-                    end
-                #end
-                throw :key_available, :key_available
+end
+
+def createPassPhrase
+    passPhrase = []
+    loop do
+        passPhrase << userPrompt(:passwd, "#{passPhrase.size == 0 ? 'E' : 'Re'}nter passphrase for key: ")
+        if passPhrase.size == 1 && passPhrase[0].empty?
+            if userPrompt :yn, "Empty passphrase. Are you sure?"
+                PassPhrase.replace ""
+                break
+            else
+                exit 1
+            end
+        elsif passPhrase.size == 2
+            if passPhrase[0] == passPhrase[1]
+                PassPhrase.replace passPhrase[0]
+                break
+            else
+                userPrompt :msg, "ERROR: passphrase not match."
+                exit 1
             end
         end
-    end == :key_available or (STDERR.puts "ERROR: no key available"; exit 1)
-
-    if IN_WSL && !`which winInputBox 2> /dev/null`.strip.empty?
-        ENV['SSH_ASKPASS'] = `which winInputBox 2> /dev/null`.strip
     end
+end
 
-    if File.exist? "#{ENV['HOME']}/.sshu/hosts/#{dest}"
-        #p ["ssh", *sshc, Prog, "--server", user, *cmdarr] 
-        exec "ssh.org", *sshc, "ssha2", "--server", user, *cmdarr
+
+def sshCommand sshc, cmd = []
+    ret = nil
+    PTY.spawn "SSH_ASKPASS=\"\" " + [*%W{ssh.org -t}, *sshc, *cmd].shelljoin do |r, w, pid|
+        tr, tw = IO.pipe
+        t = nil
+        mt = Thread.new do
+            t = Process.detach pid
+            t.join
+            tw.write "exit\n"
+            tw.flush
+        end
+        Thread.pass
+        line = ""
+        loop do
+            if pid_exited?(pid)
+                break
+            end
+            ra, = select [r, tr]
+            if ra == [tr]
+                break
+            end
+            d = r.readpartial(1024) rescue nil
+            if d
+                line << d
+            end
+            lines = line.lines
+            i = 0
+            lines.each do |l|
+                yield l, w
+                if !d
+                    break
+                end
+                i += 1
+            end
+            line = ""
+        end
+        mt.join
+        ret = t.value.to_i == 0
+    end
+    ret
+end
+           
+
+def installKey sshc, pw, key
+    cmd = "if [ ! -e ~/.ssh ];then mkdir -m 0700 ~/.ssh;fi;touch ~/.ssh/authorized_keys;chmod 600 ~/.ssh/authorized_keys;perl -i.bak -ne \"print unless(\\\$_ eq '#{key.chomp}' . chr(0x0a))\" ~/.ssh/authorized_keys;echo '#{key.chomp}' >> ~/.ssh/authorized_keys"
+    sshCommand sshc, ["bash", "-c", [cmd].shelljoin] do |line, w|
+        case line
+        when /'s password: /
+            w.write pw + "\r\n"
+            w.flush
+        end
+    end or (
+        STDERR.puts "ERROR: cannot install key."
+        exit 1
+    )
+end
+
+def createAndInstallKey sshc, dest
+    FileUtils.mkdir_p "#{ENV['HOME']}/.ssh"
+    FileUtils.chmod 0700, "#{ENV['HOME']}/.ssh"
+    if STDIN.tty?
+        STDERR.write "#{dest}'s password:"
+        STDERR.flush
+        pw = STDIN.gets.chomp
+    elsif !`which winInputBox 2> /dev/null`.strip.empty?
+        pw = `winInputBox Input password for #{dest} < /dev/null`.chomp
+    end
+    if doCheck(sshc, dest, [], {}, pw).values_at(-2, -1) != [:password, :success]
+        STDERR.puts "ERROR: password for #{dest} is not correct."
+        exit 1
+    end
+    if !File.exist? "#{ENV['HOME']}/.ssh/id_ed25519.pub"
+        createPassPhrase
+        createKey
+    end
+    installKey sshc, pw, IO.read("#{ENV['HOME']}/.ssh/id_ed25519.pub")
+end
+
+def pid_exited?(pid)
+    begin
+      # シグナル0を送信してプロセスの存在を確認
+      Process.kill(0, pid)
+      false # プロセスが存在する場合
+    rescue Errno::ESRCH
+      true  # プロセスが存在しない場合（終了している）
+    rescue Errno::EPERM
+      false # プロセスが存在するがアクセス権がない場合
+    end
+end
+
+def _clobber dir, num, max
+    if File.exist? "#{dir}/#{num}"
+        if num < max
+            _clobber dir, num + 1, max
+            FileUtils.mv "#{dir}/#{num}", "#{dir}/#{num + 1}"
+        else
+            FileUtils.rm "#{dir}/#{num + 1}"
+        end
+    end
+end
+
+def clobber dir, max
+    _clobber dir, 1, max
+end
+
+def registerConfig host, user, port, idFile, confPos
+    if confPos.empty?
+        if File.exist?("#{ENV['HOME']}/.ssh/config")
+            FileUtils.cp "#{ENV['HOME']}/.ssh/config", "#{ENV['HOME']}/.ssh/config.bak"
+        else
+            FileUtils.mkdir_p "#{ENV['HOME']}/.ssh"
+            FileUtils.chmod 0700, "#{ENV['HOME']}/.ssh"
+            FileUtils.touch "#{ENV['HOME']}/.ssh/config"
+        end
+        File.open("#{ENV['HOME']}/.ssh/config", "a") do |f|
+            f.puts "# Generated by ssha2 at #{Time.now}"
+            f.puts "Host #{host}"
+            f.puts "    User #{user}"
+            f.puts "    Port #{port}"
+            f.puts "    IdentityFile #{idFile}" if idFile
+            f.puts ""
+        end
     else
-        exec "ssh.org", *ARGV
+        file, lno = confPos[0].split ":"
+        lno = lno.to_i
+        if File.exist? file
+            lns = IO.readlines(file)
+            s = lno - 1
+            prevContent = ["#{File.mtime(file)} #{confPos[0]}\n\n"]
+            if lns[s] =~ /\s*Host\s+#{Regexp.escape host}\s*(#|$)/
+                prevContent << lns[s]
+                last = lns.size
+                user_set, port_set, idFile_set = false, false, false
+                bind = binding
+                mod = false
+                found = {}
+                same_or_replace = proc do |i, key, value|
+                    if lns[i] =~ /^(\s*)#{Regexp.escape key}\s+(\S+)(\s*)(#|$)/i
+                        if $2 != value
+                            mod = true
+                            lns[i] = "#{$1}#{key} #{value}#{$3}# Modified from '#{$2}' by ssha2 at #{Time.now}\n"
+                        end
+                        found[key] = true
+                    end
+                end
+                set_or_insert = proc do |key, value|
+                    if !found[key]
+                        lns.insert last, "#{key} #{value} # Inserted by ssha2 at #{Time.now}\n"
+                        mod = true
+                    end
+                end
+                nonBlank = nil
+                (s + 1).upto (lns.size - 1) do |i|
+                    if lns[i] =~ /\s*Host\s+/
+                        last = nonBlank + 1 || i
+                        break
+                    end
+                    if !lns[i].strip.empty?
+                        nonBlank = i
+                    end
+                    prevContent << lns[i]
+                    same_or_replace.call i, "User", user
+                    same_or_replace.call i, "Port" , port
+                    same_or_replace.call i, "IdentityFile", idFile if idFile
+                end
+                set_or_insert.call "User", user
+                set_or_insert.call "Port", port
+                set_or_insert.call "IdentityFile", idFile if idFile
+                if mod
+                    FileUtils.mv file, "#{file}.bak"
+                    IO.write file, lns.join
+                    FileUtils.chmod 0600, file
+                    d = "#{ENV['HOME']}/.ssha/config_history/#{host}"
+                    FileUtils.mkdir_p d
+                    clobber d, 10
+                    IO.write "#{d}/1", prevContent.join
+                end
+            else
+                STDERR.puts "ERROR: cannot register config."
+                exit 1
+            end
+        end
     end
+end
 
+def finger2file finger
+    
+end
+
+def doCheck sshc, dest, modIdFiles, fing2File, pw = nil
+    mode = []
+    loop do
+        rn = rand(10**9..10**10-1)
+        buff = ""
+        line = ""
+        finger = nil
+        clearKeysInSSHAgent
+        system *%W{ssh.org -O exit #{dest}}.shelljoin + " > /dev/null 2>/dev/null"
+        sshCommand ["-v"] + sshc, %W{echo #{rn}} do |l, w|
+            case l
+            when /^\r*Enter passphrase for key '(.*?)': /
+                finger = nil
+                idFile = File.expand_path $1
+                if idFile == IdFile && !PassPhrase.empty?
+                    w.write PassPhrase + "\r\n"
+                    w.flush
+                    mode << [idFile, PassPhrase]
+                elsif modIdFiles.include? idFile
+                    passPhrase = userPrompt :passswd, "Enter passphrase for key '#{$1}': "
+                    w.write passPhrase 
+                    w.flush
+                    w.write "\r\n"
+                    w.flush
+                    mode << [idFile, passPhrase]
+                else
+                    w.write "\r\n"
+                    w.flush
+                end
+                when /'s password: /
+                mode << :password
+                if !pw
+                    w.write "\r\n"
+                    w.flush
+                else
+                    w.write pw + "\r\n"
+                    w.flush
+                end
+                when /^#{rn}/
+                mode << :success
+                if mode[-2].is_a?(Array)
+                    idFile, passPhrase = mode[-2]
+                    PassPhrase.replace passPhrase
+                    IdFile.replace idFile
+                else
+                    idFile = nil
+                end
+                user, host, port = nil
+                confPos = []
+                sshCommand ["-G", "-v"] + sshc do |l, w|
+                    case l
+                    when /^user /
+                        user = $'.strip
+                    when /^host /
+                        host = $'.strip
+                    when /^port /
+                        port = $'.strip
+                    when /^debug1: (.*?) line (\d+): Applying options for #{Regexp.escape dest}\r*$/
+                        confPos.push "#{File.expand_path $1}:#{$2}"
+                    end
+                end
+                registerConfig host, user, port, idFile, confPos
+                when /^\r*Permission denied, please try again.\r*/
+                w.write "\r\n"
+                w.flush
+            when /^debug1: Server accepts key: (.*)/
+                finger = $1.strip.split[2]
+            when /^Authenticated to .* using "publickey"\./
+                if finger # id without passphrase
+                    mode << [fing2File[finger], ""]
+                end
+                finger = nil
+            end
+        end
+        if mode.all?{ _1 == :password }
+            createAndInstallKey sshc, dest
+            redo
+        end
+        break
+    end
+    mode
+end
+
+def ssh_add idf, phrase
+    PTY.spawn "SSH_ASKPASS=\"\" " + ["ssh-add", idf].shelljoin do |r, w, pid|
+        loop do
+            ra, = select [r]
+            buff = r.readpartial(1024) rescue break
+            case buff
+            when /Enter passphrase for .*:/
+                w.write phrase + "\r\n"
+                w.flush
+            when /Bad passphrase/
+                Process.kill :TERM, pid
+                STDERR.puts "ERROR: passphrase required for #{idf}"
+                STDERR.puts "Please add it with ssh-add #{idf}, before running #{Prog}"
+                exit 1
+            end
+        end
+    end
+end
+
+def getFing idf
+    IO.popen [*%W{ssh-keygen -lf}, idf] do |io|
+        return io.read.strip.sub(/\s*#.*$/, "").split[1]
+    end
+end
+
+IN_WSL = running_in_wsl?
+check = false
+
+loop do
+    case ARGV[0]
+    when /^\-\-server$/
+        ARGV.shift
+        user = ARGV.shift
+        if ARGV.empty?
+            s = get_login_shell_from_passwd user
+            if s
+                ARGV << s
+                ARGV << "-i"
+            else
+                ARGV << "bash"
+                ARGV << "-i"
+            end
+        end
+        inserter = %W{proot-distro login ubuntu --no-arch-warning --bind /dev/null:/etc/mtab --user #{user} --}
+        cmd = [*inserter, *ARGV]
+        if STDIN.tty?
+            exec *cmd
+        else
+            Open3.popen3 *cmd do |stdin, stdout, stderr, wait_thr|
+                def stderr.check_line data
+                    !data.gsub! /^proot warning:.*?\n/, ""
+                end
+                stdin.set_encoding("ASCII-8BIT")
+                stdout.set_encoding("ASCII-8BIT")
+                stderr.set_encoding("ASCII-8BIT")
+                stdin.sync = true
+                stdout.sync = true
+                stderr.sync = true
+                STDIN.set_writer stdin
+                stdout.set_writer STDOUT
+                stderr.set_writer STDERR
+                rarr = []
+                loop do
+                    rarr.push stdout if !stdout.eof?
+                    rarr.push stderr if !stderr.eof?
+                    rarr.push STDIN
+                    break if rarr == [STDIN]
+                    rs, = IO.select(rarr)
+                    rs.each do |r|
+                        r.transfer
+                    end
+                    rarr.clear
+                end
+                [stdout, stderr].each do |f|
+                    f.join
+                end
+            end
+        end
+    when /^\-\-check$/
+        ARGV.shift
+        check = true
+        redo
+    else
+        nextIsOptArg = false
+        dest = nil
+        cmdarr = []
+        cmdpos = nil
+        terminal = false
+        inserter = %W{proot-distro login ubuntu --bind /dev/null:/etc/mtab -- su #{ENV['USER']} -c}
+        curOpt = nil
+        optArg = {}    
+
+        ARGV.each_with_index do |arg, i|
+            if cmdarr.empty?
+                if nextIsOptArg
+                    nextIsOptArg = false
+                    optArg[curOpt] = arg
+                    next
+                end
+                # 先頭が-の引数はオプション引数とみなす
+                if arg =~ /^\-/
+                    curOpt = nil
+                    $'.each_char do |c|
+                        if curOpt.nil?
+                            case c
+                            when /^[46AaCfGgKkMNnqsVvXxYy]$/
+                            when "t"
+                                terminal = true
+                            when "T"
+                                terminal = false
+                            when /^[BbcDEeFIiJLlmOoPpRSWw]$/
+                                optArg[curOpt = $&] = ""
+                            end
+                        else
+                            optArg[curOpt] += c
+                        end
+                    end
+                    if optArg[curOpt] == ""
+                        nextIsOptArg = true
+                    end
+                elsif !dest
+                    dest = arg
+                else
+                    cmdpos = i
+                    cmdarr << arg        
+                end
+            else
+                cmdarr << arg
+            end
+        end
+
+        if !cmdpos
+            cmdarr = []
+            sshc = ["-t", *ARGV]
+            terminal = true
+        else
+            sshc = ARGV[0...cmdpos]
+        end
+
+        user = nil
+        host = nil
+        port = nil
+        idFileList = []
+        
+        paramLines = []
+        IO.popen "echo 1 |SSH_ASKPASS=\"\" " + [*%W{ssh.org -G}, *sshc].shelljoin + " 2>&1" do |io|
+            io.each_line do |line|
+                #STDERR.write line.inspect
+                case line
+                when /^user /
+                    user = $'.strip
+                when /^host /
+                    host = $'.strip
+                when /^port /
+                    port = $'.strip
+                when /^identityfile /
+                    idFileList.push File.expand_path($'.strip)
+                end
+                paramLines << line
+            end
+        end
+        idFileFingList = {} 
+        idFileFingToFileName = {}
+        idFileList.each do |idf|
+            if File.exist? idf
+                fing = getFing(idf)
+                idFileFingList[idf] = fing
+            end                
+        end
+        id_files_content = ""
+        fing2File = {}
+        idFileFingList.each do |idf, fing|
+            id_files_content << "#{fing} #{idf}\n"
+            fing2File[fing] ||= idf
+        end
+        prev_id_files_content = IO.read "#{ENV['HOME']}/.ssha/id_files" rescue ""
+        if check
+            testFiles = idFileList
+        elsif prev_id_files_content != id_files_content
+            prev_a = []
+            prev_id_files_content.each_line do |line|
+                if line =~ /\#/
+                    line = $`
+                end
+                prev_a << line.strip.split(" ", 2).values_at(1, 0)
+            end
+            modifiedFiles = []
+            (idFileFingList.to_a - prev_a).each do |idf, fing|
+                modifiedFiles.push idf
+            end
+            testFiles = modifiedFiles
+        else
+            testFiles = []
+        end
+
+        if !testFiles.empty?
+            if doCheck(sshc, dest, testFiles, fing2File)[-1] == :success
+                IO.write "#{ENV['HOME']}/.ssha/id_files", id_files_content
+            end
+        end
+        
+        if !user
+            STDERR.write paramLines.join
+            exit 1
+        end
+
+        added = getKeyListInSSHAgent
+
+        catch :key_available do
+            idFileList.each do |idf|
+                if File.exist? idf
+                    if key_has_passphrase? idf
+                        finger = getFing idf
+                        if !added.include? finger
+                            errExit = proc do
+                                STDERR.puts "ERROR: #{idf} not added to ssh-agent"
+                                STDERR.puts "Please add it with ssh-add #{idf}"
+                                exit 1
+                            end
+                            if PassPhrase.empty?
+                                if STDIN.tty?
+                                    if !system "ssh-add", idf
+                                        errExit.call
+                                    end
+                                elsif !`which winInputBox 2> /dev/null`.strip.empty?
+                                    phrase = `winInputBox Input passphrase for #{idf} < /dev/null`.chomp!
+                                    ssh_add idf, phrase
+                                else
+                                    STDERR.puts "ERROR: passphrase required for #{idf}"
+                                    STDERR.puts "Please add it with ssh-add #{idf}, before running #{Prog}"
+                                    exit 1                        
+                                end
+                            else
+                                ssh_add idf, PassPhrase
+                            end
+                        end
+                    end
+                    throw :key_available, :key_available
+                end
+            end
+        end == :key_available or (
+            if !check
+                check = true
+                redo
+            end
+            STDERR.puts "ERROR: no key available"
+            exit 1
+        )
+
+        if IN_WSL && !`which winInputBox 2> /dev/null`.strip.empty?
+            ENV['SSH_ASKPASS'] = `which winInputBox 2> /dev/null`.strip
+        end
+
+        if File.exist? "#{ENV['HOME']}/.sshu/hosts/#{dest}"
+            #p ["ssh", *sshc, Prog, "--server", user, *cmdarr] 
+            exec "ssh.org", *sshc, "ssha2", "--server", user, *cmdarr
+        else
+            exec "ssh.org", *ARGV
+        end
+    end
+    break
 end
 

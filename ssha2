@@ -28,7 +28,7 @@ def get_session_id(sid)
     nil
 end
 
-FileUtils.mkdir_p "#{ENV['HOME']}/.ssha
+FileUtils.mkdir_p "#{ENV['HOME']}/.ssha"
 FileUtils.chmod 0700, "#{ENV['HOME']}/.ssha"
 
 Sid = Process.getsid(0) # 現在のセッションIDを取得
@@ -213,7 +213,7 @@ def running_in_wsl?
 end
 
 def key_has_passphrase?(key_path)
-       output = ""
+    output = ""
     PTY.spawn "SSH_ASKPASS=\"\" " + ["ssh-keygen", "-y", "-f", key_path].shelljoin do |r, w, pid|
         select [r]
         out = r.readpartial(1024) rescue nil
@@ -222,10 +222,12 @@ def key_has_passphrase?(key_path)
             if out =~ /Enter passphrase for key/
                 w.write "\r\n"
                 w.flush
-                Process.kill :TERM, pid
             end
+            Process.kill :TERM, pid
         end
+        Process.wait pid
     end
+
     output.include?("Enter passphrase")
 end
 
@@ -774,7 +776,7 @@ loop do
 
         added = getKeyListInSSHAgent
 
-        catch :key_available do
+        res = catch :key_available do
             idFileList.each do |idf|
                 if File.exist? idf
                     if key_has_passphrase? idf
@@ -806,7 +808,8 @@ loop do
                     throw :key_available, :key_available
                 end
             end
-        end == :key_available or (
+        end 
+        res == :key_available or (
             if !check
                 check = true
                 redo

@@ -797,12 +797,18 @@ loop do
                                     ssh_add idf, phrase
                                 else
                                     r = File.open "/proc/#{This_session.split("-")[0].to_i}/fd/0" rescue nil
-                                    if r && r.tty?
-                                        phrase = r.noecho(&:gets).chomp
-                                        ssh_add idf, phrase
-                                    else
-                                        STDERR.puts "ERROR: passphrase required for #{idf}"
-                                        STDERR.puts "Please add it with ssh-add #{idf}, before running #{Prog}"
+                                    begin
+                                        if r && r.tty?
+                                            STDERR.print "Input passphrase for #{idf}: "
+                                            STDERR.flush
+                                            phrase = r.noecho(&:gets).chomp
+                                            ssh_add idf, phrase
+                                        else
+                                            STDERR.puts "ERROR: passphrase required for #{idf}"
+                                            STDERR.puts "Please add it with ssh-add #{idf}, before running #{Prog}"
+                                        end
+                                    ensure
+                                        r.close if r
                                     end
                                 end
                             else

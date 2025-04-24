@@ -67,16 +67,41 @@ def set_ssh_agent_params retry_item
         ssh_agent_pid = File.read("#{SAgentParams}/ssh_agent_pid").strip
         retry_item = :new
     else
-        IO.popen %W{ssh-agent -s}, err: [:child, :out] do |r|
-            r.each_line do |line|
-                if line =~ /SSH_AUTH_SOCK=(.*?)(;|$)/
-                    ssh_auth_sock = $1
-                end
-                if line =~ /SSH_AGENT_PID=(.*?)(;|$)/
-                    ssh_agent_pid = $1
-                end
-            end
+        #IO.popen %W{ssh-agent -s}, err: [:child, :out] do |r|
+         #   r.each_line do |line|
+         #       if line =~ /SSH_AUTH_SOCK=(.*?)(;|$)/
+         #           ssh_auth_sock = $1
+         #       end
+         #       if line =~ /SSH_AGENT_PID=(.*?)(;|$)/
+         #           ssh_agent_pid = $1
+         #       end
+         #   end
+        #end
+        r, w = IO.pipe
+
+        pid = Process.spawn(
+          "ssh-agent -s",
+          out: w, # 標準出力をパイプにリダイレクト
+          err: w, # 標準エラーをパイプにリダイレクト
+          close_others: true # 必要なファイルディスクリプタ以外を閉じる
+        )
+        
+        w.close # 書き込み側を閉じる
+        
+        r.each_line do |line|
+          if line =~ /SSH_AUTH_SOCK=(.*?)(;|$)/
+            ssh_auth_sock = $1
+          end
+          if line =~ /SSH_AGENT_PID=(.*?)(;|$)/
+            ssh_agent_pid = $1
+          end
         end
+        
+        r.close # 読み取り側を閉じる
+        
+        Process.wait(pid) # 子プロセスの終了を待つ
+
+
         if !ssh_auth_sock || !ssh_agent_pid
             STDERR.puts "ERROR: cannot start ssh-agent."
             exit 1

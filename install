@@ -1,17 +1,16 @@
-#!/bin/bash
+#!/bin/env bash
 
-if [ "`id -u`" -ne 0 ]; then
-    exec sudo "$0" "$@"
+. gy_support
+
+
+if [ ! -e "$R/usr/bin/ssh.org" -o $R/usr/bin/ssh -nt $R/usr/bin/ssh.org ]; then
+    if file $(realpath $R/usr/bin/ssh) | grep -q ": ELF" then
+        sudo mv $R/usr/bin/ssh{,.org}
+    fi
 fi
-ln -sf /var/lib/git_project/s/winInputBox /usr/bin/winInputBox
 
-if [ -e "/usr/bin/ssh.org" ]; then
-    echo "ERROR: /usr/bin/ssh.org found. Stop installing."
-    exit 1
-fi
-
-mv /usr/bin/ssh /usr/bin/ssh.org
-ln -sf /var/lib/git_project/s/ssha2 /usr/bin/ssh
+install winInputBox ssha2
+ln -sf $R/usr/bin/{ssha2,ssh}
 
 
 

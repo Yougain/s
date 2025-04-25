@@ -4,7 +4,7 @@
 
 
 if [ ! -e "$R/usr/bin/ssh.org" -o $R/usr/bin/ssh -nt $R/usr/bin/ssh.org ]; then
-    if file $(realpath $R/usr/bin/ssh) | grep -q ": ELF" then
+    if file $(realpath $R/usr/bin/ssh) | grep -q ": ELF"; then
         sudo mv $R/usr/bin/ssh{,.org}
     fi
 fi

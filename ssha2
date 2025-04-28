@@ -710,6 +710,7 @@ loop do
         user = nil
         host = nil
         port = nil
+        hostname = nil
         idFileList = []
         
         paramLines = []
@@ -721,6 +722,8 @@ loop do
                     user = $'.strip
                 when /^host /
                     host = $'.strip
+                when /^hostname/
+                    hostname = $'.strip
                 when /^port /
                     port = $'.strip
                 when /^identityfile /
@@ -833,8 +836,68 @@ loop do
             ENV['SSH_ASKPASS'] = `which winInputBox 2> /dev/null`.strip
         end
 
+        logit = proc do |msg|
+            File.open "#{ENV['HOME']}/.ssha/cmd_log", "a" do |f|
+                f.write "ssh[#{$$}] #{Time.now.strftime("%Y-%m-%d %H:%M:%S.%L")} #{msg}\n"
+            end
+        end
+        if ENV['SSHA_CMD_LOG']
+            FileUtils.mkdir_p "#{ENV['HOME']}/.ssha"
+            logit.call "started: ssh #{ARGV.join(" ")}"
+        end
+        info_d = "#{ENV['HOME']}/.ssha/limited_controlled_hosts/#{dest}:#{port}"
+        limit = IO.read("#{info_d}/limit").to_i rescue nil
+        prev = IO.read("#{info_d}/.prev_trial").to_i rescue 0
+        r, w = nil
+        if limit
+            btime = `grep btime /proc/stat`.split[1]
+            proc_unique = "#{btime}/#{File.read("/proc/#{$$}/stat").split[21].to_i}-#{$$}"
+            info_d_each = "#{info_d}/#{proc_unique}"
+            FileUtils.mkdir_p info_d_each
+            if (Time.now.to_i - prev) > limit
+                closeControlCMD = "ssh.org -O exit #{port && "-p #{port}"} #{dest}"
+                system "#{closeControlCMD} > /dev/null 2>/dev/null"
+                logit.call closeControlCMD
+            end
+            IO.write "#{info_d}/.prev_trial", Time.now.to_i
+
+            if ENV['SSHA_CMD_LOG']
+                this_pid = $$
+                pstart = File.read("/proc/#{$$}/stat").split[21].to_i rescue (p; exit(0))
+                fork do
+                    prev_sc = nil
+                    logF = File.open "#{info_d_each}/syscall_log", "a"
+                    ausycallExist = File.exist? "/usr/bin/ausycall"
+                    sc_time = nil
+                    slist = {}
+                    loop do
+                        sc = IO.read "/proc/#{this_pid}/syscall" rescue (p; exit(0))
+                        if pstart != (File.read("/proc/#{this_pid}/stat").split[21].to_i rescue (p; exit(0)))
+                            exit 0
+                        end
+                        if sc != prev_sc
+                            sc_time = Time.now
+                            FileUtils.rm_f "#{info_d_each}/stalled"
+                            scnum = sc.split[0].to_i
+                            slist[scnum] ||= " " + `ausyscall #{scnum}`.chomp
+                            scname = slist[scnum]
+                            msg = "#{sc_time.strftime("%Y-%m-%d %H:%M:%S.%L")} ssh[#{this_pid}]#{scname} #{sc}"
+                            logF.puts msg
+                            logF.flush
+                        else
+                            if !File.exist? "#{info_d_each}/stalled"
+                                FileUtils.touch "#{info_d_each}/stalled" 
+                                File.utime(sc_time, sc_time, "#{info_d_each}/stalled")
+                            end
+                        end
+                        prev_sc = sc
+                        sleep 0.1
+                    end
+                end
+            end
+        end
         if File.exist? "#{ENV['HOME']}/.sshu/hosts/#{dest}"
-            #p ["ssh", *sshc, Prog, "--server", user, *cmdarr] 
+            #p ["ssh", *sshc, Prog, "--server", user, *cmdarr]
             exec "ssh.org", *sshc, "ssha2", "--server", user, *cmdarr
         else
             exec "ssh.org", *ARGV

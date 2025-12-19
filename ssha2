@@ -743,15 +743,8 @@ loop do
         idFileList = []
         
         paramLines = []
-                File.open "a", "a" do |fp|
-                  fp.write "[#{$$}]" + ARGV.inspect + "\n"
-                  fp.write "[#{$$}]" + sshc.inspect + "\n"
-                end
         IO.popen "echo 1 |SSH_ASKPASS=\"\" " + [*%W{ssh.org -G}, *sshc].shelljoin + " 2>&1" do |io|
             io.each_line do |line|
-                File.open "a", "a" do |fp|
-                  fp.write "[#{$$}]" + line.inspect + "\n"
-                end
                 case line
                 when /^user /
                     user = $'.strip

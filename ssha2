@@ -658,54 +658,83 @@ loop do
         terminal = false
         inserter = %W{proot-distro login ubuntu --bind /dev/null:/etc/mtab -- su #{ENV['USER']} -c}
         curOpt = nil
-        optArg = {}    
+        optArg = Hash.new{|h, k| h[k] = []}
+        optLine = []
+        optFin = false
+        subsys = false
+        u = nil
+        IO.popen "ssh.org 2>&1" do |fr|
+          u = fr.read
+        end
+        aOpts = ""
+        if u =~ /\[\-(\w\w+)\]/
+          sOpts = $1
+        end
+        while u =~ /\[\-(\w) /
+          aOpts += $1
+          u = $'
+        end
 
         ARGV.each_with_index do |arg, i|
             if cmdarr.empty?
-                if nextIsOptArg
-                    nextIsOptArg = false
-                    optArg[curOpt] = arg
+              if !optFin
+                  if nextIsOptArg
+                      nextIsOptArg = false
+                      optArg[curOpt].push arg
+                      optLine.push "-#{curOpt}", arg
+                      next
+                  end
+                  # 先頭が-の引数はオプション引数とみなす
+                  if arg == "--"
+                    optFin = true
                     next
-                end
-                # 先頭が-の引数はオプション引数とみなす
-                if arg =~ /^\-/
-                    curOpt = nil
-                    $'.each_char do |c|
-                        if curOpt.nil?
-                            case c
-                            when /^[46AaCfGgKkMNnqsVvXxYy]$/
-                            when "t"
-                                terminal = true
-                            when "T"
-                                terminal = false
-                            when /^[BbcDEeFIiJLlmOoPpRSWw]$/
-                                optArg[curOpt = $&] = ""
-                            end
+                  elsif arg =~ /^\-/
+                      curOpt = nil
+                      $'.each_char do |c|
+                          if curOpt.nil?
+                              case c
+                              when "s"
+                                  subsys = true
+                              when "t"
+                                  terminal = true
+                              when "T"
+                                  terminal = false
+                              when /^[#{sOpts}]$/
+                                    optLine.push "-#{c}"
+                              when /^[#{aOpts}]$/
+                                  optArg[curOpt = $&].push ""
+                              end
+                          else
+                              optArg[curOpt][-1] += c
+                          end
+                      end
+                      if curOpt
+                        if optArg[curOpt][-1] == ""
+                            nextIsOptArg = true
                         else
-                            optArg[curOpt] += c
+                            optLine.push "-#{curOpt}", optArg[curOpt][-1]
                         end
-                    end
-                    if optArg[curOpt] == ""
-                        nextIsOptArg = true
-                    end
-                elsif !dest
-                    dest = arg
-                else
-                    cmdpos = i
-                    cmdarr << arg        
-                end
+                      end
+                      next
+                  end
+              end
+              if !dest
+                dest = arg
+              else
+                cmdpos = i
+                 cmdarr << arg        
+              end
             else
                 cmdarr << arg
             end
         end
 
         if !cmdpos
+            optLine <<  "-t"
             cmdarr = []
-            sshc = ["-t", *ARGV]
             terminal = true
-        else
-            sshc = ARGV[0...cmdpos]
         end
+        sshc = optLine + ["--", dest]
 
         user = nil
         host = nil
@@ -714,9 +743,15 @@ loop do
         idFileList = []
         
         paramLines = []
+                File.open "a", "a" do |fp|
+                  fp.write "[#{$$}]" + ARGV.inspect + "\n"
+                  fp.write "[#{$$}]" + sshc.inspect + "\n"
+                end
         IO.popen "echo 1 |SSH_ASKPASS=\"\" " + [*%W{ssh.org -G}, *sshc].shelljoin + " 2>&1" do |io|
             io.each_line do |line|
-                #STDERR.write line.inspect
+                File.open "a", "a" do |fp|
+                  fp.write "[#{$$}]" + line.inspect + "\n"
+                end
                 case line
                 when /^user /
                     user = $'.strip

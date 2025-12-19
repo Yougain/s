@@ -924,8 +924,7 @@ loop do
                 end
             end
         end
-        if File.exist? "#{ENV['HOME']}/.sshu/hosts/#{dest}"
-            #p ["ssh", *sshc, Prog, "--server", user, *cmdarr]
+        if dest && File.exist?("#{ENV['HOME']}/.sshu/hosts/#{dest}")
             exec "ssh.org", *sshc, "ssha2", "--server", user, *cmdarr
         else
             exec "ssh.org", *ARGV

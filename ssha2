@@ -8,6 +8,76 @@ require 'io/console'
 #require 'Yk/debug2'
 require 'digest'
 
+require 'open3'
+require 'io/console'
+
+def _get_controlling_tty
+  pid = Process.pid
+  
+  while pid > 1
+    # Use ps to get the TTY for the process
+    stdout, stderr, status = Open3.capture3("ps -o tty= -p #{pid}")
+    if status.success?
+      tty = stdout.strip
+      if tty != '?' && !tty.empty?
+        # Format the TTY path appropriately
+        if tty.start_with?('pts/') || tty.start_with?('tty')
+          return "/dev/#{tty}"
+        else
+          # For macOS or other formats like ttysXXX
+          return "/dev/#{tty}"
+        end
+      end
+    end
+    
+    # Get the parent PID
+    stdout, stderr, status = Open3.capture3("ps -o ppid= -p #{pid}")
+    if status.success?
+      ppid = stdout.strip.to_i
+      pid = ppid
+    else
+      break
+    end
+  end
+  
+  nil  # No TTY found
+end
+
+def ctty
+  ($ctty ||= _get_controlling_tty) || exit(1)
+end
+
+
+def prompt_pw msg
+    File.open(ctty, 'r+') do |tty|
+      tty.print msg
+      tty.flush
+      password = tty.noecho(&:gets).chomp
+      return password
+    end
+end
+
+def prompt_yn msg
+    File.open(ctty, 'r+') do |tty|
+      loop do
+        tty.print msg
+        tty.flush
+        res = tty.gets.chomp
+        if res =~ /yes|y|no|n/
+          return res =~ /y/
+        end
+      end
+    end
+end
+
+def put_msg msg
+  File.open(ctty, 'r') do |tty|
+        tty.print msg
+   end 
+end
+
+
+
 def get_session_id(sid)
     output = `ps -eo pid,sid,lstart --no-headers`.lines
     output.each do |line|
@@ -242,31 +312,47 @@ def createKey
     IdFile.replace "#{ENV['HOME']}/.ssh/id_ed25519"
 end
 
+
+
 def userPrompt mode, msg = nil
+    p mode
     case mode
     when :yn
+        p 5432543
         if STDIN.tty?
             STDERR.print msg.chomp
             STDERR.flush
             ans = STDIN.gets.strip
             return ans =~ /^(y|yes)$/i
-        else
+        elsif IN_WSL
+          aaa
             return system "winInputBox --confirm Empty passphrase. Are you sure?"
+        else
+            return prompt_yn
         end
     when String, :msg
+        p 432434324324322
         if STDIN.tty?
             STDERR.puts msg.chomp
             STDERR.flush
-        else
+        elsif IN_WSL
+aaaa
             system "winInputBox --message #{msg.chomp}"
+        else
+            return put_msg(msg)
         end
-    when :password, :passwd, :input
+    when :passwd, :passwd, :input
+        p 432434324324322
         if STDIN.tty?
+            p 534253425
             STDERR.print msg.chomp
             STDERR.flush
             input = mode != :input ? STDIN.noecho(&:gets).chomp : STDIN.gets.chomp
-        else
+        elsif IN_WSL
+aaaaaa
             input = `winInputBox #{msg.chomp}`.chomp
+        else
+            input = prompt_pw
         end
         return input
     end
@@ -504,7 +590,7 @@ def doCheck sshc, dest, modIdFiles, fing2File, pw = nil
                     w.flush
                     mode << [idFile, PassPhrase]
                 elsif modIdFiles.include? idFile
-                    passPhrase = userPrompt :passswd, "Enter passphrase for key '#{$1}': "
+                    passPhrase = userPrompt :passwd, "Enter passphrase for key '#{$1}': "
                     w.write passPhrase 
                     w.flush
                     w.write "\r\n"
@@ -778,6 +864,8 @@ loop do
         if check
             testFiles = idFileList
         elsif prev_id_files_content != id_files_content
+            p prev_id_files_content
+            p id_files_content
             prev_a = []
             prev_id_files_content.each_line do |line|
                 if line =~ /\#/
@@ -793,9 +881,8 @@ loop do
         else
             testFiles = []
         end
-
         if !testFiles.empty?
-            if doCheck(sshc, dest, testFiles, fing2File)[-1] == :success
+            if (resc = doCheck(sshc, dest, testFiles, fing2File)[-1]) == :success
                 IO.write "#{ENV['HOME']}/.ssha/id_files", id_files_content
             end
         end
@@ -823,24 +910,12 @@ loop do
                                     if !system "ssh-add", idf
                                         errExit.call
                                     end
-                                elsif !`which winInputBox 2> /dev/null`.strip.empty?
+                                elsif IN_WSL && !`which winInputBox 2> /dev/null`.strip.empty?
                                     phrase = `winInputBox Input passphrase for #{idf} < /dev/null`.chomp!
                                     ssh_add idf, phrase
                                 else
-                                    r = File.open "/proc/#{This_session.split("-")[0].to_i}/fd/0" rescue nil
-                                    begin
-                                        if r && r.tty?
-                                            STDERR.print "Input passphrase for #{idf}: "
-                                            STDERR.flush
-                                            phrase = r.noecho(&:gets).chomp
-                                            ssh_add idf, phrase
-                                        else
-                                            STDERR.puts "ERROR: passphrase required for #{idf}"
-                                            STDERR.puts "Please add it with ssh-add #{idf}, before running #{Prog}"
-                                        end
-                                    ensure
-                                        r.close if r
-                                    end
+                                    phrase = prompt_pw "Input passphrase for #{idf}: "
+                                    ssh_add idf, phrase
                                 end
                             else
                                 ssh_add idf, PassPhrase

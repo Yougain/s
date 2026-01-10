@@ -315,41 +315,38 @@ end
 
 
 def userPrompt mode, msg = nil
-    p mode
+    #p mode
     case mode
     when :yn
-        p 5432543
+        #p 5432543
         if STDIN.tty?
             STDERR.print msg.chomp
             STDERR.flush
             ans = STDIN.gets.strip
             return ans =~ /^(y|yes)$/i
         elsif IN_WSL
-          aaa
             return system "winInputBox --confirm Empty passphrase. Are you sure?"
         else
             return prompt_yn
         end
     when String, :msg
-        p 432434324324322
+        #p 432434324324322
         if STDIN.tty?
             STDERR.puts msg.chomp
             STDERR.flush
         elsif IN_WSL
-aaaa
             system "winInputBox --message #{msg.chomp}"
         else
             return put_msg(msg)
         end
     when :passwd, :passwd, :input
-        p 432434324324322
+        #p 432434324324322
         if STDIN.tty?
-            p 534253425
+            #p 534253425
             STDERR.print msg.chomp
             STDERR.flush
             input = mode != :input ? STDIN.noecho(&:gets).chomp : STDIN.gets.chomp
         elsif IN_WSL
-aaaaaa
             input = `winInputBox #{msg.chomp}`.chomp
         else
             input = prompt_pw
@@ -864,8 +861,8 @@ loop do
         if check
             testFiles = idFileList
         elsif prev_id_files_content != id_files_content
-            p prev_id_files_content
-            p id_files_content
+            #p prev_id_files_content
+            #p id_files_content
             prev_a = []
             prev_id_files_content.each_line do |line|
                 if line =~ /\#/

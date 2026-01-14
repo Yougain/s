@@ -573,6 +573,7 @@ def finger2file finger
     
 end
 
+
 def doCheck sshc, dest, modIdFiles, fing2File, pw = nil
     mode = []
     loop do

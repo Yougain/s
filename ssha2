@@ -43,37 +43,60 @@ def _get_controlling_tty
   nil  # No TTY found
 end
 
-def ctty
-  ($ctty ||= _get_controlling_tty) || exit(1)
+Ctty = _get_controlling_tty
+
+
+def setupIO
+    if STDIN.tty?
+        cin = STDIN
+    else
+        Ctty && (cin = File.open(Ctty, 'r+') rescue nil)
+    end
+    if STDERR.tty?
+        cout = STDERR
+    else
+        Ctty && (cout = cin || (File.open(Ctty, 'r+') rescue nil))
+    end
+    [cin, cout]
 end
+
+Cin, Cout = setupIO
 
 
 def prompt_pw msg
-    File.open(ctty, 'r+') do |tty|
-      tty.print msg
-      tty.flush
-      password = tty.noecho(&:gets).chomp
-      return password
+    Cout.print msg
+    Cout.flush
+    begin
+        Cout.echo = false
+        password = Cin.gets.chomp
+    ensure
+        Cout.echo = true
+        Cout.puts ""
     end
+    return password
+end
+
+def prompt_input msg
+    Cout.print msg
+    Cout.flush
+    input = Cin.gets.chomp
+    return input
 end
 
 def prompt_yn msg
-    File.open(ctty, 'r+') do |tty|
-      loop do
-        tty.print msg
-        tty.flush
-        res = tty.gets.chomp
+    loop do
+        Cout.print msg
+        Cout.flush
+        res = Cin.gets.chomp
         if res =~ /yes|y|no|n/
-          return res =~ /y/
+            return res =~ /y/
         end
-      end
     end
 end
 
 def put_msg msg
-  File.open(ctty, 'r') do |tty|
-        tty.print msg
-   end 
+    Cout.print msg
+    Cout.flush
 end
 
 
@@ -163,7 +186,7 @@ def set_ssh_agent_params retry_item
 
 
         if !ssh_auth_sock || !ssh_agent_pid
-            STDERR.puts "ERROR: cannot start ssh-agent."
+            userPrompt :msg, "ERROR: cannot start ssh-agent."
             exit 1
         end
         FileUtils.mkdir_p SAgentParams
@@ -193,7 +216,7 @@ def getKeyListInSSHAgent
         end
     rescue Err => e
         if retry_item.nil?
-            STDERR.puts "ERROR: Cannot start ssh-agent (#{e.message})."
+            userPrompt :msg, "ERROR: Cannot start ssh-agent (#{e.message})."
             exit 1
         end
         retry_item = set_ssh_agent_params retry_item
@@ -306,7 +329,7 @@ IdFile = ""
 
 def createKey
     if !system "SSH_ASKPASS=\"\" " + ["ssh-keygen", "-t", "ed25519", "-f", "#{ENV['HOME']}/.ssh/id_ed25519", "-N", PassPhrase].shelljoin
-        STDERR.puts "ERROR: cannot create key."
+        Cout.puts "ERROR: cannot create key."
         exit 1
     end
     IdFile.replace "#{ENV['HOME']}/.ssh/id_ed25519"
@@ -318,38 +341,26 @@ def userPrompt mode, msg = nil
     #p mode
     case mode
     when :yn
-        #p 5432543
-        if STDIN.tty?
-            STDERR.print msg.chomp
-            STDERR.flush
-            ans = STDIN.gets.strip
-            return ans =~ /^(y|yes)$/i
+        if Cin
+            return prompt_yn
         elsif IN_WSL
             return system "winInputBox --confirm Empty passphrase. Are you sure?"
-        else
-            return prompt_yn
         end
-    when String, :msg
-        #p 432434324324322
-        if STDIN.tty?
-            STDERR.puts msg.chomp
-            STDERR.flush
+    when :msg
+        if Cin
+            return put_msg msg
         elsif IN_WSL
-            system "winInputBox --message #{msg.chomp}"
-        else
-            return put_msg(msg)
+            return system "winInputBox --message #{msg.chomp}"
         end
     when :passwd, :passwd, :input
-        #p 432434324324322
-        if STDIN.tty?
-            #p 534253425
-            STDERR.print msg.chomp
-            STDERR.flush
-            input = mode != :input ? STDIN.noecho(&:gets).chomp : STDIN.gets.chomp
+        if Cin
+            if mode == :passwd || mode == :passwd
+                input = prompt_pw msg
+            else
+                input = prompt_input msg
+            end
         elsif IN_WSL
             input = `winInputBox #{msg.chomp}`.chomp
-        else
-            input = prompt_pw
         end
         return input
     end
@@ -358,7 +369,7 @@ end
 def createPassPhrase
     passPhrase = []
     loop do
-        passPhrase << userPrompt(:passwd, "#{passPhrase.size == 0 ? 'E' : 'Re'}nter passphrase for key: ")
+        passPhrase << userPrompt(:passwd, "#{passPhrase.size == 0 ? 'E' : 'Ree'}nter passphrase for key: ")
         if passPhrase.size == 1 && passPhrase[0].empty?
             if userPrompt :yn, "Empty passphrase. Are you sure?"
                 PassPhrase.replace ""
@@ -431,7 +442,7 @@ def installKey sshc, pw, key
             w.flush
         end
     end or (
-        STDERR.puts "ERROR: cannot install key."
+        userPrompt :msg, "ERROR: cannot install key."
         exit 1
     )
 end
@@ -439,15 +450,9 @@ end
 def createAndInstallKey sshc, dest
     FileUtils.mkdir_p "#{ENV['HOME']}/.ssh"
     FileUtils.chmod 0700, "#{ENV['HOME']}/.ssh"
-    if STDIN.tty?
-        STDERR.write "#{dest}'s password:"
-        STDERR.flush
-        pw = STDIN.gets.chomp
-    elsif !`which winInputBox 2> /dev/null`.strip.empty?
-        pw = `winInputBox Input password for #{dest} < /dev/null`.chomp
-    end
+    pw = userPrompt :passwd, "#{dest}'s password:"
     if doCheck(sshc, dest, [], {}, pw).values_at(-2, -1) != [:password, :success]
-        STDERR.puts "ERROR: password for #{dest} is not correct."
+        userPrompt :msg, "ERROR: password for #{dest} is not correct."
         exit 1
     end
     if !File.exist? "#{ENV['HOME']}/.ssh/id_ed25519.pub"
@@ -557,7 +562,7 @@ def registerConfig host, user, port, idFile, confPos
                     IO.write "#{d}/1", prevContent.join
                 end
             else
-                STDERR.puts "ERROR: cannot register config."
+                userPrompt :msg, "ERROR: cannot register config."
                 exit 1
             end
         end
@@ -597,7 +602,7 @@ def doCheck sshc, dest, modIdFiles, fing2File, pw = nil
                     w.write "\r\n"
                     w.flush
                 end
-                when /'s password: /
+            when /'s password: /
                 mode << :password
                 if !pw
                     w.write "\r\n"
@@ -606,7 +611,7 @@ def doCheck sshc, dest, modIdFiles, fing2File, pw = nil
                     w.write pw + "\r\n"
                     w.flush
                 end
-                when /^#{rn}/
+            when /^#{rn}/
                 mode << :success
                 if mode[-2].is_a?(Array)
                     idFile, passPhrase = mode[-2]
@@ -630,7 +635,7 @@ def doCheck sshc, dest, modIdFiles, fing2File, pw = nil
                     end
                 end
                 registerConfig host, user, port, idFile, confPos
-                when /^\r*Permission denied, please try again.\r*/
+            when /^\r*Permission denied, please try again.\r*/
                 w.write "\r\n"
                 w.flush
             when /^debug1: Server accepts key: (.*)/
@@ -640,9 +645,24 @@ def doCheck sshc, dest, modIdFiles, fing2File, pw = nil
                     mode << [fing2File[finger], ""]
                 end
                 finger = nil
+            when /Connection refused/
+                mode << :connection_refused
+                userPrompt :msg, l.chomp
+            when /No route to host/
+                mode << :no_route_to_host
+                userPrompt :msg, l.chomp
+            when /Are you sure you want to continue connecting/
+                yn = userPrompt :yn, l.chomp
+                w.write yn + "\r\n"
+            when /Please type \'yes\'\, \'no\' or the fingerprint:/
+                input = userPrompt :input, l.chomp
+                w.write input + "\r\n"
+            when /Host key verification failed/
+                mode << :host_key_verification_failed
+                userPrompt :msg, l.chomp
             end
         end
-        if mode.all?{ _1 == :password }
+        if !mode.empty? && mode.all?{ _1 == :password } && !pw
             createAndInstallKey sshc, dest
             redo
         end
@@ -662,11 +682,12 @@ def ssh_add idf, phrase
                 w.flush
             when /Bad passphrase/
                 Process.kill :TERM, pid
-                STDERR.puts "ERROR: passphrase required for #{idf}"
-                STDERR.puts "Please add it with ssh-add #{idf}, before running #{Prog}"
+                userPrompt :msg, "ERROR: passphrase required for #{idf}\nPlease add it with ssh-add #{idf}, before running #{Prog}"
                 exit 1
             end
         end
+        Process.wait(pid)
+        $?.exitstatus == 0
     end
 end
 
@@ -885,7 +906,7 @@ loop do
         end
         
         if !user
-            STDERR.write paramLines.join
+            userPrompt :msg, paramLines.join
             exit 1
         end
 
@@ -898,24 +919,20 @@ loop do
                         finger = getFing idf
                         if !added.include? finger
                             errExit = proc do
-                                STDERR.puts "ERROR: #{idf} not added to ssh-agent"
-                                STDERR.puts "Please add it with ssh-add #{idf}"
+                                userPrompt :msg, "ERROR: #{idf} not added to ssh-agent\nPlease add it with ssh-add #{idf}"
                                 exit 1
                             end
                             if PassPhrase.empty?
-                                if STDIN.tty?
-                                    if !system "ssh-add", idf
-                                        errExit.call
-                                    end
-                                elsif IN_WSL && !`which winInputBox 2> /dev/null`.strip.empty?
-                                    phrase = `winInputBox Input passphrase for #{idf} < /dev/null`.chomp!
-                                    ssh_add idf, phrase
+                                phrase = userPrompt :passwd, "Input passphrase for #{idf}: "
+                                if ssh_add idf, phrase
+                                    PassPhrase.replace phrase
+                                    IdFile.replace idf
                                 else
-                                    phrase = prompt_pw "Input passphrase for #{idf}: "
-                                    ssh_add idf, phrase
+                                    errExit.call
                                 end
                             else
-                                ssh_add idf, PassPhrase
+                                ssh_add idf, PassPhrase or errExit.call
+                                IdFile.replace idf
                             end
                         end
                     end
@@ -928,7 +945,7 @@ loop do
                 check = true
                 redo
             end
-            STDERR.puts "ERROR: no key available"
+            userPrompt :msg, "ERROR: no key available"
             exit 1
         )
 

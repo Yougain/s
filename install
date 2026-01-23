@@ -11,6 +11,8 @@ fi
 
 install winInputBox ssha2
 sudo ln -sf $R/usr/local/bin/ssha2 /usr/bin/ssh
+sudo ln -sf $R/usr/local/bin/ssha2 /usr/local/bin/ssh-agent
+sudo ln -sf $R/usr/local/bin/ssha2 /usr/local/bin/ssh-add
 
 
 

@@ -36,14 +36,14 @@ when nil
   result = callVBS.call <<-VBS
     Dim result
     result = InputBox("#{prompt}", "#{title}", "#{default_value}")
-    WScript.Echo result
+    WScript.StdOut.Write result
   VBS
-  puts result
+  STDOUT.write result.chomp
 when "--confirm"
   result = callVBS.call <<-VBS
     Dim result
     result = MsgBox("#{title}", vbYesNo + vbQuestion, "#{title}")
-    WScript.Echo result
+    WScript.StdOut.Write result
   VBS
   if result == "6" # vbYes
     exit 0

@@ -1,0 +1,20 @@
+#!/bin/bash
+
+THIS=$(readlink -f $0)
+
+
+if [ -z "$TMPP" ];then
+    P=/tmp/${THIS##*/}.$$.tmp
+    cmd.exe /c start wsl TMPP=$P $THIS 2>/dev/null </dev/null
+    cat $P
+    cleanup() {
+        rm -f $P
+    }
+    trap cleanup EXIT TERM INT
+    exit 0
+fi
+
+echo -n "Enter password: "
+read -s -r password
+echo ""
+echo "$password" > $TMPP

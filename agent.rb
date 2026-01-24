@@ -45,6 +45,9 @@ end
 
 
 def set_ssh_agent_params retry_item
+    if ENV['SSH_AUTH_SOCK']
+        return nil
+    end
     ssh_auth_sock = nil
     ssh_agent_pid = nil
     if retry_item == :previous && File.exist?("#{SAgentParams}/ssh_auth_sock") && File.exist?("#{SAgentParams}/ssh_agent_pid")
@@ -89,6 +92,17 @@ def set_ssh_agent_params retry_item
     end
     ENV['SSH_AUTH_SOCK'] = ssh_auth_sock
     ENV['SSH_AGENT_PID'] = ssh_agent_pid
+    if ENV["FOR_EVAL"]
+        fd = ENV["FOR_EVAL"].to_i
+        begin
+            IO.new(fd, "w") do |io|
+                io.puts "export SSH_AUTH_SOCK='#{ssh_auth_sock}';"
+                io.puts "export SSH_AGENT_PID='#{ssh_agent_pid}';"
+                io.puts "echo Agent pid #{ssh_agent_pid};"
+            end
+        rescue
+        end
+    end
     retry_item
 end
 

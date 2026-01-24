@@ -20,7 +20,7 @@ __run_with_eval() {
 
     # 子からの全文を読み取り、eval
     local payload
-    payload=$(<&"$rfd")
+     
     [ -n "$payload" ] && eval "$payload"
 
     # 後片付け
@@ -38,6 +38,7 @@ __run_with_eval() {
 ssh()        { __run_with_eval ssh "$@"; }
 __ssh_add()    { __run_with_eval ssh-add "$@"; }
 __ssh_agent()  { __run_with_eval ssh-agent "$@"; }
+scp()        { __run_with_eval scp -S /usr/local/bin/ssh "$@"; }
 
 # コマンド名そのままで呼べるように
 alias ssh-add='__ssh_add'

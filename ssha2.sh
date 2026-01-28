@@ -27,3 +27,5 @@ __ssha2_ssh_agent(){
 # コマンド名そ  のままで呼べるように
 alias ssh-add='__ssha2_ssh_add'
 alias ssh-agent='__ssha2_ssh_agent'
+
+export GIT_SSH=/usr/local/bin/ssha2

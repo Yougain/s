@@ -27,8 +27,8 @@ FPID = "#{PROC_START_CLOCK}.#{Process.pid}"
 BY_WIN = IN_WSL
 BY_SSH_BAT = ENV["VSCODE_BAT"] == "1"
 BY_VSCODE = ENV["VSCODE_NONCE"] && !ENV["VSCODE_NONCE"].empty?
-SSH_ORG_PTY = BY_SSH_BAT ? ["/mnt/c/Program Files/Git/usr/bin/winpty.exe", "-Xallow-non-tty", "ssh.exe"] : ["ssh.org"]
-SSH_ORG = BY_SSH_BAT ? "ssh.exe" : "ssh.org"
+SSH_ORG_PTY = BY_SSH_BAT ? ["/mnt/c/Program Files/Git/usr/bin/winpty.exe", "-Xallow-non-tty", "ssh.exe"] : ["ssh"]
+SSH_ORG = BY_SSH_BAT ? "ssh.exe" : "ssh"
 
 
 SSH_ADD_PTY = BY_SSH_BAT ? ["/mnt/c/Program Files/Git/usr/bin/winpty.exe",  "-Xallow-non-tty", "ssh-add.exe"] : ["ssh-add"]
@@ -456,7 +456,7 @@ def do_ssh *args
         args.pop # remove temporary shell for KEY_CHECK_IN_ADVANCE=1
         args.push "SHELL_ID=#{shellID} WINSZ=#{wsz.join(",")} bash -l"
         case args[0]
-        when "ssh.org"
+        when "ssh"
         when "ssh.exe"
             args.unshift "-Xallow-non-tty"
             args.unshift "/mnt/c/Program Files/Git/usr/bin/winpty.exe"
@@ -645,581 +645,580 @@ end
 
 def main
     optArgs = {}
-    case File.basename($0)
-    when "ssh-agent"
-        while !ARGV.empty?
-            case ARGV[0]
-            when "--"
-                ARGV.shift
-                break
-            when /^\-([^\s]*)/
-                $1.each_char do |c|
-                    if "aEOPt".include?(c)
-                        optArgs[c] = $' != "" ? $' : ARGV.shift
-                        break
-                    else
-                        optArgs[c] = true
-                    end
-                end
-                ARGV.shift
-            else
-                break
-            end
-        end
-        cmdline = ARGV
-        if optArgs["k"] && cmdline.empty?
-            destroySSHAgent
-            exit 0
-        end
-        if optArgs.empty? && cmdline.empty?
-            displaySSHAgentParams
-            exit 0
-        end
-        STDERR.puts "ERROR: unsupported options/commands.\n       This is a modified ssh-agent. Please use '/usr/bin/ssh-agent ...'."
-        exit 1
-    when "ssh-add"
-        getKeyListInSSHAgent
-        exec "/usr/bin/ssh-add", *ARGV
-    else
-        clause do
-            case ARGV[0]
-            when /^\-\-ask$/
-                ARGV.shift
-                res = userPrompt :passwd, ARGV[0]
-                puts res
-                exit 0
-            when "--print_tmp_script_file_name"
-                print_tmp_script_file_name = true
-                ARGV.shift
-                redo
-            when /^\-\-server$/
-                require "#{ProgDir}/proot_server.rb"
-                proot_server
-            when /^\-\-check$/
-                ARGV.shift
-                check = true
-                redo
-            else
-                nextIsOptArg = false
-                dest = nil
-                cmdarr = []
-                cmdpos = nil
-                terminal = false
-                inserter = %W{proot-distro login ubuntu --bind /dev/null:/etc/mtab -- su #{ENV['USER']} -c}
-                curOpt = nil
-                optArg = Hash.new{|h, k| h[k] = []}
-                optLine = []
-                optFin = false
-                subsys = false
-
-                u = `#{SSH_ORG} 2>&1 < /dev/null` # for Windows ssh.exe initial setup
-                aOpts = ""
-                if u =~ /\[\-(\w\w+)\]/
-                    sOpts = $1
-                end
-                while u =~ /\[\-(\w) /
-                    aOpts += $1
-                    u = $'
-                end
-
-                ARGV.each_with_index do |arg, i|
-                    if cmdarr.empty?
-                    if !optFin
-                        if nextIsOptArg
-                            nextIsOptArg = false
-                            optArg[curOpt].push arg
-                            optLine.push "-#{curOpt}", arg
-                            next
-                        end
-                        # 先頭が-の引数はオプション引数とみなす
-                        if arg == "--"
-                            optFin = true
-                            next
-                        elsif arg =~ /^\-/
-                            curOpt = nil
-                            $'.each_char do |c|
-                                if curOpt.nil?
-                                    case c
-                                    when "s"
-                                        subsys = true
-                                    when "t"
-                                        terminal = true
-                                    when "T"
-                                        terminal = false
-                                    when /^[#{sOpts}]$/
-                                            optLine.push "-#{c}"
-                                    when /^[#{aOpts}]$/
-                                        optArg[curOpt = $&].push ""
-                                    end
-                                else
-                                    optArg[curOpt][-1] += c
-                                end
-                            end
-                            if curOpt
-                                if optArg[curOpt][-1] == ""
-                                    nextIsOptArg = true
-                                else
-                                    optLine.push "-#{curOpt}", optArg[curOpt][-1]
-                                end
-                            end
-                            next
-                        end
-                    end
-                    if !dest
-                        dest = arg
-                    else
-                        cmdpos = i
-                        cmdarr << arg        
-                    end
-                    else
-                        cmdarr << arg
-                    end
-                end
-
-                if !cmdpos
-                    optLine <<  "-t"
-                    cmdarr = []
-                    terminal = true
-                end
-                sshc = optLine + ["--", dest]
-
-                user = nil
-                host = nil
-                port = nil
-                hostname = nil
-                idFileList = []
-                
-                paramLines = []
-                IO.popen "echo 1 |SSH_ASKPASS=\"\" " + [*%W{ssh.org -G}, *sshc].shelljoin + " 2>&1 </dev/null" do |io|
-                    io.each_line do |line|
-                        case line
-                        when /^user /
-                            user = $'.strip
-                        when /^host /
-                            host = $'.strip
-                        when /^hostname/
-                            hostname = $'.strip
-                        when /^port /
-                            port = $'.strip
-                        when /^identityfile /
-                            idFileList.push File.expand_path($'.strip)
-                        end
-                        paramLines << line
-                    end
-                end
-                paramLines.reject!{ _1 =~ /^\w+algorithms / || _1 =~ /^Pseudo\-terminal/ }
-
-                idFileFingList = {} 
-                idFileFingToFileName = {}
-                idFileList.each do |idf|
-                    if File.exist? idf
-                        fing = getFing(idf)
-                        idFileFingList[idf] = fing
-                    end                
-                end
-                id_files_content = ""
-                fing2File = {}
-                idFileFingList.each do |idf, fing|
-                    id_files_content << "#{fing} #{idf}\n"
-                    fing2File[fing] ||= idf
-                end
-                prev_id_files_content = IO.read "#{SSHA_HOME}/id_files" rescue ""
-                if check
-                    testFiles = idFileList
-                elsif prev_id_files_content != id_files_content
-                    #p prev_id_files_content
-                    #p id_files_content
-                    prev_a = []
-                    prev_id_files_content.each_line do |line|
-                        if line =~ /\#/
-                            line = $`
-                        end
-                        prev_a << line.strip.split(" ", 2).values_at(1, 0)
-                    end
-                    modifiedFiles = []
-                    (idFileFingList.to_a - prev_a).each do |idf, fing|
-                        modifiedFiles.push idf
-                    end
-                    testFiles = modifiedFiles
-                else
-                    testFiles = []
-                end
-                if !testFiles.empty?
-                    if (resc = doCheck(sshc, dest, testFiles, fing2File)[-1]) == :success
-                        IO.write "#{SSHA_HOME}/id_files", id_files_content
-                    end
-                end
-                
-                if !user
-                    userPrompt :msg, paramLines.join
-                    exit 1
-                end
-
-                if SSH_ORG == "ssh.exe"
-
-                    IO.write "#{WTMPDL}/config", paramLines.join
-                    loop do
-                        badLines = []
-                        fcnt = 0
-                        IO.popen "cd #{WTMPDL};ssh.exe -G -F config #{dest} 2>&1 </dev/null" do |fr|
-                            fr.each_line do |ln|
-                                ln.chomp!
-                                if ln =~ /: line (\d+): Bad /
-                                    badLines.push $1.to_i
-                                end
-                            end
-                        end
-                        j = 0
-                        if badLines.empty?
+    clause do
+        case ARGV[0]
+        when "--ssh-agent"
+            ARGV.shift
+            while !ARGV.empty?
+                case ARGV[0]
+                when "--"
+                    ARGV.shift
+                    break
+                when /^\-([^\s]*)/
+                    $1.each_char do |c|
+                        if "aEOPt".include?(c)
+                            optArgs[c] = $' != "" ? $' : ARGV.shift
                             break
+                        else
+                            optArgs[c] = true
                         end
-                        File.open "#{WTMPDL}/config", "w" do |fw|
-                            paramLines.each_with_index do |ln, i|
-                                if i + 1 == badLines[j]
-                                    # remove bad lines
-                                    j = j + 1
+                    end
+                    ARGV.shift
+                else
+                    break
+                end
+            end
+            cmdline = ARGV
+            if optArgs["k"] && cmdline.empty?
+                destroySSHAgent
+                exit 0
+            end
+            if optArgs.empty? && cmdline.empty?
+                displaySSHAgentParams
+                exit 0
+            end
+            STDERR.puts "ERROR: unsupported options/commands.\n       This is a modified ssh-agent. Please use '/usr/bin/ssh-agent ...'."
+            exit 1
+        when "--ssh-add"
+            ARGV.shift
+            getKeyListInSSHAgent
+            exec "/usr/bin/ssh-add", *ARGV
+        when "--ask"
+            ARGV.shift
+            res = userPrompt :passwd, ARGV[0]
+            puts res
+            exit 0
+        when "--print_tmp_script_file_name"
+            print_tmp_script_file_name = true
+            ARGV.shift
+            redo
+        when "--server"
+            require "#{ProgDir}/proot_server.rb"
+            proot_server            
+        when "--check"
+            ARGV.shift
+            check = true
+            redo
+        else
+            nextIsOptArg = false
+            dest = nil
+            cmdarr = []
+            cmdpos = nil
+            terminal = false
+            inserter = %W{proot-distro login ubuntu --bind /dev/null:/etc/mtab -- su #{ENV['USER']} -c}
+            curOpt = nil
+            optArg = Hash.new{|h, k| h[k] = []}
+            optLine = []
+            optFin = false
+            subsys = false
+
+            u = `#{SSH_ORG} 2>&1 < /dev/null` # for Windows ssh.exe initial setup
+            aOpts = ""
+            if u =~ /\[\-(\w\w+)\]/
+                sOpts = $1
+            end
+            while u =~ /\[\-(\w) /
+                aOpts += $1
+                u = $'
+            end
+
+            ARGV.each_with_index do |arg, i|
+                if cmdarr.empty?
+                if !optFin
+                    if nextIsOptArg
+                        nextIsOptArg = false
+                        optArg[curOpt].push arg
+                        optLine.push "-#{curOpt}", arg
+                        next
+                    end
+                    # 先頭が-の引数はオプション引数とみなす
+                    if arg == "--"
+                        optFin = true
+                        next
+                    elsif arg =~ /^\-/
+                        curOpt = nil
+                        $'.each_char do |c|
+                            if curOpt.nil?
+                                case c
+                                when "s"
+                                    subsys = true
+                                when "t"
+                                    terminal = true
+                                when "T"
+                                    terminal = false
+                                when /^[#{sOpts}]$/
+                                        optLine.push "-#{c}"
+                                when /^[#{aOpts}]$/
+                                    optArg[curOpt = $&].push ""
+                                end
+                            else
+                                optArg[curOpt][-1] += c
+                            end
+                        end
+                        if curOpt
+                            if optArg[curOpt][-1] == ""
+                                nextIsOptArg = true
+                            else
+                                optLine.push "-#{curOpt}", optArg[curOpt][-1]
+                            end
+                        end
+                        next
+                    end
+                end
+                if !dest
+                    dest = arg
+                else
+                    cmdpos = i
+                    cmdarr << arg        
+                end
+                else
+                    cmdarr << arg
+                end
+            end
+
+            if !cmdpos
+                optLine <<  "-t"
+                cmdarr = []
+                terminal = true
+            end
+            sshc = optLine + ["--", dest]
+
+            user = nil
+            host = nil
+            port = nil
+            hostname = nil
+            idFileList = []
+            
+            paramLines = []
+            IO.popen "echo 1 |SSH_ASKPASS=\"\" " + [*%W{ssh -G}, *sshc].shelljoin + " 2>&1 </dev/null" do |io|
+                io.each_line do |line|
+                    case line
+                    when /^user /
+                        user = $'.strip
+                    when /^host /
+                        host = $'.strip
+                    when /^hostname/
+                        hostname = $'.strip
+                    when /^port /
+                        port = $'.strip
+                    when /^identityfile /
+                        idFileList.push File.expand_path($'.strip)
+                    end
+                    paramLines << line
+                end
+            end
+            paramLines.reject!{ _1 =~ /^\w+algorithms / || _1 =~ /^Pseudo\-terminal/ }
+
+            idFileFingList = {} 
+            idFileFingToFileName = {}
+            idFileList.each do |idf|
+                if File.exist? idf
+                    fing = getFing(idf)
+                    idFileFingList[idf] = fing
+                end                
+            end
+            id_files_content = ""
+            fing2File = {}
+            idFileFingList.each do |idf, fing|
+                id_files_content << "#{fing} #{idf}\n"
+                fing2File[fing] ||= idf
+            end
+            prev_id_files_content = IO.read "#{SSHA_HOME}/id_files" rescue ""
+            if check
+                testFiles = idFileList
+            elsif prev_id_files_content != id_files_content
+                #p prev_id_files_content
+                #p id_files_content
+                prev_a = []
+                prev_id_files_content.each_line do |line|
+                    if line =~ /\#/
+                        line = $`
+                    end
+                    prev_a << line.strip.split(" ", 2).values_at(1, 0)
+                end
+                modifiedFiles = []
+                (idFileFingList.to_a - prev_a).each do |idf, fing|
+                    modifiedFiles.push idf
+                end
+                testFiles = modifiedFiles
+            else
+                testFiles = []
+            end
+            if !testFiles.empty?
+                if (resc = doCheck(sshc, dest, testFiles, fing2File)[-1]) == :success
+                    IO.write "#{SSHA_HOME}/id_files", id_files_content
+                end
+            end
+            
+            if !user
+                userPrompt :msg, paramLines.join
+                exit 1
+            end
+
+            if SSH_ORG == "ssh.exe"
+
+                IO.write "#{WTMPDL}/config", paramLines.join
+                loop do
+                    badLines = []
+                    fcnt = 0
+                    IO.popen "cd #{WTMPDL};ssh.exe -G -F config #{dest} 2>&1 </dev/null" do |fr|
+                        fr.each_line do |ln|
+                            ln.chomp!
+                            if ln =~ /: line (\d+): Bad /
+                                badLines.push $1.to_i
+                            end
+                        end
+                    end
+                    j = 0
+                    if badLines.empty?
+                        break
+                    end
+                    File.open "#{WTMPDL}/config", "w" do |fw|
+                        paramLines.each_with_index do |ln, i|
+                            if i + 1 == badLines[j]
+                                # remove bad lines
+                                j = j + 1
+                                next
+                            end
+                            if ln !~ /\# replaced by ssha2/ && ln =~ /^(\w+)file /
+                                files = $'.split
+                                pre = $1 + "file "
+                                # copy under windows userprofile and replace file parameter on config file
+                                wfiles = []
+                                files.each do |fi|
+                                    fi = File.expand_path fi
+                                    if File.exist? fi
+                                        fcnt += 1
+                                        FileUtils.cp fi, WTMPDL + "/file." + fcnt.to_s
+                                        wfiles.push WTMPDW + "\\file." + fcnt.to_s
+                                    end
+                                end
+                                if !wfiles.empty?
+                                    ln = pre + wfiles.join(" ") + " # replaced by ssha2"
+                                else
                                     next
                                 end
-                                if ln !~ /\# replaced by ssha2/ && ln =~ /^(\w+)file /
-                                    files = $'.split
-                                    pre = $1 + "file "
-                                    # copy under windows userprofile and replace file parameter on config file
-                                    wfiles = []
-                                    files.each do |fi|
-                                        fi = File.expand_path fi
-                                        if File.exist? fi
-                                            fcnt += 1
-                                            FileUtils.cp fi, WTMPDL + "/file." + fcnt.to_s
-                                            wfiles.push WTMPDW + "\\file." + fcnt.to_s
-                                        end
-                                    end
-                                    if !wfiles.empty?
-                                        ln = pre + wfiles.join(" ") + " # replaced by ssha2"
-                                    else
-                                        next
-                                    end
-                                end
-                                fw.write ln
                             end
+                            fw.write ln
                         end
                     end
                 end
+            end
 
-                # setting ENV for ssh-add
-                added = getKeyListInSSHAgent
+            # setting ENV for ssh-add
+            added = getKeyListInSSHAgent
 
-                if KEY_CHECK_IN_ADVANCE
-                    res = catch :key_available do
-                        idFileList.each do |idf|
-                            if File.exist? idf
-                                if key_has_passphrase? idf
-                                    finger = getFing idf
-                                    if !added.include? finger
-                                        errExit = proc do
-                                            userPrompt :msg, "ERROR: #{idf} not added to ssh-agent\nPlease add it with ssh-add #{idf}"
-                                            exit 1
-                                        end
-                                        if PassPhrase.empty?
-                                            phrase = userPrompt :passwd, "Input passphrase for #{idf}: "
-                                            if ssh_add idf, phrase
-                                                PassPhrase.replace phrase
-                                                IdFile.replace idf
-                                            else
-                                                errExit.call
-                                            end
-                                        elsif idf == IdFile
-                                            ssh_add idf, PassPhrase or errExit.call
+            if KEY_CHECK_IN_ADVANCE
+                res = catch :key_available do
+                    idFileList.each do |idf|
+                        if File.exist? idf
+                            if key_has_passphrase? idf
+                                finger = getFing idf
+                                if !added.include? finger
+                                    errExit = proc do
+                                        userPrompt :msg, "ERROR: #{idf} not added to ssh-agent\nPlease add it with ssh-add #{idf}"
+                                        exit 1
+                                    end
+                                    if PassPhrase.empty?
+                                        phrase = userPrompt :passwd, "Input passphrase for #{idf}: "
+                                        if ssh_add idf, phrase
+                                            PassPhrase.replace phrase
                                             IdFile.replace idf
+                                        else
+                                            errExit.call
                                         end
+                                    elsif idf == IdFile
+                                        ssh_add idf, PassPhrase or errExit.call
+                                        IdFile.replace idf
                                     end
                                 end
-                                throw :key_available, :key_available
                             end
+                            throw :key_available, :key_available
                         end
-                    end 
-                    res == :key_available or (
-                        if !check
-                            check = true
-                            redo
-                        end
-                        userPrompt :msg, "ERROR: no key available"
-                        exit 1
-                    )
-                end
-
-                #if IN_WSL && !`which winInputBox 2> /dev/null`.strip.empty?
-                #    ENV['SSH_ASKPASS'] = `which winInputBox 2> /dev/null`.strip
-                #end
-
-                logit = proc do |msg|
-                    File.open "#{SSHA_HOME}/cmd_log", "a" do |f|
-                        f.write "ssh[#{$$}] #{Time.now.strftime("%Y-%m-%d %H:%M:%S.%L")} #{msg}\n"
                     end
+                end 
+                res == :key_available or (
+                    if !check
+                        check = true
+                        redo
+                    end
+                    userPrompt :msg, "ERROR: no key available"
+                    exit 1
+                )
+            end
+
+            #if IN_WSL && !`which winInputBox 2> /dev/null`.strip.empty?
+            #    ENV['SSH_ASKPASS'] = `which winInputBox 2> /dev/null`.strip
+            #end
+
+            logit = proc do |msg|
+                File.open "#{SSHA_HOME}/cmd_log", "a" do |f|
+                    f.write "ssh[#{$$}] #{Time.now.strftime("%Y-%m-%d %H:%M:%S.%L")} #{msg}\n"
                 end
+            end
+            if ENV['SSHA_CMD_LOG']
+                logit.call "started: ssh #{ARGV.join(" ")}"
+            end
+            info_d = "#{SSHA_HOME}/limited_controlled_hosts/#{dest}:#{port}"
+            limit = IO.read("#{info_d}/limit").to_i rescue nil
+            prev = IO.read("#{info_d}/.prev_trial").to_i rescue 0
+            r, w = nil
+            if limit
+                btime = `grep btime /proc/stat`.split[1]
+                proc_unique = "#{btime}/#{File.read("/proc/#{$$}/stat").split[21].to_i}-#{$$}"
+                info_d_each = "#{info_d}/#{proc_unique}"
+                FileUtils.mkdir_p info_d_each
+                if (Time.now.to_i - prev) > limit
+                    closeControlCMD = "#{SSH_ORG} -O exit #{port && "-p #{port}"} #{dest}"
+                    system "#{closeControlCMD} > /dev/null 2>/dev/null"
+                    logit.call closeControlCMD
+                end
+                IO.write "#{info_d}/.prev_trial", Time.now.to_i
+
                 if ENV['SSHA_CMD_LOG']
-                    logit.call "started: ssh #{ARGV.join(" ")}"
-                end
-                info_d = "#{SSHA_HOME}/limited_controlled_hosts/#{dest}:#{port}"
-                limit = IO.read("#{info_d}/limit").to_i rescue nil
-                prev = IO.read("#{info_d}/.prev_trial").to_i rescue 0
-                r, w = nil
-                if limit
-                    btime = `grep btime /proc/stat`.split[1]
-                    proc_unique = "#{btime}/#{File.read("/proc/#{$$}/stat").split[21].to_i}-#{$$}"
-                    info_d_each = "#{info_d}/#{proc_unique}"
-                    FileUtils.mkdir_p info_d_each
-                    if (Time.now.to_i - prev) > limit
-                        closeControlCMD = "#{SSH_ORG} -O exit #{port && "-p #{port}"} #{dest}"
-                        system "#{closeControlCMD} > /dev/null 2>/dev/null"
-                        logit.call closeControlCMD
-                    end
-                    IO.write "#{info_d}/.prev_trial", Time.now.to_i
-
-                    if ENV['SSHA_CMD_LOG']
-                        this_pid = $$
-                        pstart = File.read("/proc/#{$$}/stat").split[21].to_i rescue (p; exit(0))
-                        fork do
-                            prev_sc = nil
-                            logF = File.open "#{info_d_each}/syscall_log", "a"
-                            ausycallExist = File.exist? "/usr/bin/ausycall"
-                            sc_time = nil
-                            slist = {}
-                            loop do
-                                sc = IO.read "/proc/#{this_pid}/syscall" rescue (p; exit(0))
-                                if pstart != (File.read("/proc/#{this_pid}/stat").split[21].to_i rescue (p; exit(0)))
-                                    exit 0
-                                end
-                                if sc != prev_sc
-                                    sc_time = Time.now
-                                    FileUtils.rm_f "#{info_d_each}/stalled"
-                                    scnum = sc.split[0].to_i
-                                    slist[scnum] ||= " " + `ausyscall #{scnum}`.chomp
-                                    scname = slist[scnum]
-                                    msg = "#{sc_time.strftime("%Y-%m-%d %H:%M:%S.%L")} ssh[#{this_pid}]#{scname} #{sc}"
-                                    logF.puts msg
-                                    logF.flush
-                                else
-                                    if !File.exist? "#{info_d_each}/stalled"
-                                        FileUtils.touch "#{info_d_each}/stalled" 
-                                        File.utime(sc_time, sc_time, "#{info_d_each}/stalled")
-                                    end
-                                end
-                                prev_sc = sc
-                                sleep 0.1
+                    this_pid = $$
+                    pstart = File.read("/proc/#{$$}/stat").split[21].to_i rescue (p; exit(0))
+                    fork do
+                        prev_sc = nil
+                        logF = File.open "#{info_d_each}/syscall_log", "a"
+                        ausycallExist = File.exist? "/usr/bin/ausycall"
+                        sc_time = nil
+                        slist = {}
+                        loop do
+                            sc = IO.read "/proc/#{this_pid}/syscall" rescue (p; exit(0))
+                            if pstart != (File.read("/proc/#{this_pid}/stat").split[21].to_i rescue (p; exit(0)))
+                                exit 0
                             end
+                            if sc != prev_sc
+                                sc_time = Time.now
+                                FileUtils.rm_f "#{info_d_each}/stalled"
+                                scnum = sc.split[0].to_i
+                                slist[scnum] ||= " " + `ausyscall #{scnum}`.chomp
+                                scname = slist[scnum]
+                                msg = "#{sc_time.strftime("%Y-%m-%d %H:%M:%S.%L")} ssh[#{this_pid}]#{scname} #{sc}"
+                                logF.puts msg
+                                logF.flush
+                            else
+                                if !File.exist? "#{info_d_each}/stalled"
+                                    FileUtils.touch "#{info_d_each}/stalled" 
+                                    File.utime(sc_time, sc_time, "#{info_d_each}/stalled")
+                                end
+                            end
+                            prev_sc = sc
+                            sleep 0.1
                         end
                     end
                 end
-                if dest && File.exist?("#{ENV['HOME']}/.sshu/hosts/#{dest}")
-                    exec "ssh.org", *sshc, "ssha2", "--server", user, *cmdarr
-                else
-                    if cmdarr.empty?
-                        if IN_WSL
-                            vport = VSC_WSL_PORT
-                            r, w = IO.pipe
-                            pid = fork do
-                                require 'socket'
-                                r.close
-                                server = TCPServer.new(VSC_WSL_PORT) rescue exit(1)
-                                puts "VSCode Control Server listening on port #{VSC_WSL_PORT}"
-                                Process.daemon
-                                w.puts "started"
-                                w.flush
-                                w.close
-
-                                loop do
-                                    # クライアントからの接続を待つ
-                                    client = server.accept
-                                    
-                                    # 各クライアントを別スレッドで処理
-                                    Thread.new(client) do |conn|
-                                        begin
-                                            puts "Client connected: #{conn.peeraddr[3]}"
-                                            
-                                            # データを受信
-                                            while line = conn.gets
-                                                puts "Received: #{line.chomp}"
-                                                line.chomp!
-                                                case line
-                                                when /^test$/
-                                                    conn.puts "OK"
-                                                when /^open remote\s+([\w\-]+)$/
-                                                    # エコーバック
-                                                    host = $1
-                                                    conn.puts "Echo: #{line}"
-                                                    system "code --remote ssh-remote+#{host} &"
-                                                end
-                                            end
-                                        rescue => e
-                                            puts "Error: #{e.message}"
-                                        ensure
-                                            conn.close
-                                            puts "Client disconnected"
-                                        end
-                                    end
-                                end
-                            end
+            end
+            if dest && File.exist?("#{ENV['HOME']}/.sshu/hosts/#{dest}")
+                exec "ssh", *sshc, "ssha2", "--server", user, *cmdarr
+            else
+                if cmdarr.empty?
+                    if IN_WSL
+                        vport = VSC_WSL_PORT
+                        r, w = IO.pipe
+                        pid = fork do
+                            require 'socket'
+                            r.close
+                            server = TCPServer.new(VSC_WSL_PORT) rescue exit(1)
+                            puts "VSCode Control Server listening on port #{VSC_WSL_PORT}"
+                            Process.daemon
+                            w.puts "started"
+                            w.flush
                             w.close
-                            Process.wait pid
-                            ret = r.readpartial(1024) rescue nil
-                            if ret
-                                if ret.chomp == "started"
-                                    r.close
-                                else
-                                    STDERR.puts "ERROR: detected abnormal debug monitor."
-                                    exit 1
-                                end
-                            end
-                        else
-                            vport = 0
-                            # vport = ENV['VS_CONTROL_PORT']:if.to_i
-                            if ENV['VS_CONTROL_PORT']
-                                vport = ENV['VS_CONTROL_PORT'].to_i
-                            elsif File.exist? "/tmp/vscode_control"
-                                ent = Dir.entries("/tmp/vscode_control/sshds").delete_if{ |e| e == "." || e == ".." || e != SYS_START }[0]
-                                entst = {}
-                                Dir.entries("/tmp/vscode_control/sshds/#{ent}").each do |ent|
-                                    next if ent !~ /^\d+\.\d+$/
-                                    sproc_start, spid = ent.split(".")
-                                    entf = "/tmp/vscode_control/sshds/#{SYS_START}/#{ent}"
-                                    t = IO.read("/proc/#{spid}/stat").split[21].to_i rescue 0
-                                    if t == sproc_start.to_i
-                                        #FileUtils.rm_f entf rescue nil
-                                        entst[entf] = t
+
+                            loop do
+                                # クライアントからの接続を待つ
+                                client = server.accept
+                                
+                                # 各クライアントを別スレッドで処理
+                                Thread.new(client) do |conn|
+                                    begin
+                                        puts "Client connected: #{conn.peeraddr[3]}"
+                                        
+                                        # データを受信
+                                        while line = conn.gets
+                                            puts "Received: #{line.chomp}"
+                                            line.chomp!
+                                            case line
+                                            when /^test$/
+                                                conn.puts "OK"
+                                            when /^open remote\s+([\w\-]+)$/
+                                                # エコーバック
+                                                host = $1
+                                                conn.puts "Echo: #{line}"
+                                                system "code --remote ssh-remote+#{host} &"
+                                            end
+                                        end
+                                    rescue => e
+                                        puts "Error: #{e.message}"
+                                    ensure
+                                        conn.close
+                                        puts "Client disconnected"
                                     end
                                 end
-                                if !entst.empty?
-                                    vport = catch :found do
-                                        entst.keys.sort_by{ |entf| entst[entf] }.reverse_each do |entf|
-                                            v = IO.read entf rescue 0
-                                            require 'socket'
-                                            TCPSocket.open("127.0.0.1", v.to_i) do |s|
-                                                s.write "test\n"
-                                                resp = s.gets.chomp rescue nil
-                                                if resp == "OK"
-                                                    throw :found, v.to_i
-                                                end
+                            end
+                        end
+                        w.close
+                        Process.wait pid
+                        ret = r.readpartial(1024) rescue nil
+                        if ret
+                            if ret.chomp == "started"
+                                r.close
+                            else
+                                STDERR.puts "ERROR: detected abnormal debug monitor."
+                                exit 1
+                            end
+                        end
+                    else
+                        vport = 0
+                        # vport = ENV['VS_CONTROL_PORT']:if.to_i
+                        if ENV['VS_CONTROL_PORT']
+                            vport = ENV['VS_CONTROL_PORT'].to_i
+                        elsif File.exist? "/tmp/vscode_control"
+                            ent = Dir.entries("/tmp/vscode_control/sshds").delete_if{ |e| e == "." || e == ".." || e != SYS_START }[0]
+                            entst = {}
+                            Dir.entries("/tmp/vscode_control/sshds/#{ent}").each do |ent|
+                                next if ent !~ /^\d+\.\d+$/
+                                sproc_start, spid = ent.split(".")
+                                entf = "/tmp/vscode_control/sshds/#{SYS_START}/#{ent}"
+                                t = IO.read("/proc/#{spid}/stat").split[21].to_i rescue 0
+                                if t == sproc_start.to_i
+                                    #FileUtils.rm_f entf rescue nil
+                                    entst[entf] = t
+                                end
+                            end
+                            if !entst.empty?
+                                vport = catch :found do
+                                    entst.keys.sort_by{ |entf| entst[entf] }.reverse_each do |entf|
+                                        v = IO.read entf rescue 0
+                                        require 'socket'
+                                        TCPSocket.open("127.0.0.1", v.to_i) do |s|
+                                            s.write "test\n"
+                                            resp = s.gets.chomp rescue nil
+                                            if resp == "OK"
+                                                throw :found, v.to_i
                                             end
                                         end
                                     end
                                 end
                             end
                         end
-                        free_port = "0"
-                        if KEY_CHECK_IN_ADVANCE
-                            rand_id = (10**9 + rand(9*10**9)).to_s
-                            io = IO.popen [*SSH_ORG, "-q", *sshc, "bash"], "w+"
-                            begin
-                                io.write('
-                                    find_free_port() {
-                                        local port=$((10000 + RANDOM % 55535))
-                                        while (echo >/dev/tcp/127.0.0.1/$port) 2>/dev/null; do
-                                            port=$((10000 + RANDOM % 55535))
-                                        done
-                                        echo $port
-                                    }
+                    end
+                    free_port = "0"
+                    if KEY_CHECK_IN_ADVANCE
+                        rand_id = (10**9 + rand(9*10**9)).to_s
+                        io = IO.popen [*SSH_ORG, "-q", *sshc, "bash"], "w+"
+                        begin
+                            io.write('
+                                find_free_port() {
+                                    local port=$((10000 + RANDOM % 55535))
+                                    while (echo >/dev/tcp/127.0.0.1/$port) 2>/dev/null; do
+                                        port=$((10000 + RANDOM % 55535))
+                                    done
+                                    echo $port
+                                }
 
-                                    FREE_PORT=$(find_free_port)
-                                    echo $FREE_PORT
-                                    mkdir -p /tmp/vscode_control/shell_wrappers
-                                    cat <<END > /tmp/vscode_control/shell_wrappers/'"#{rand_id}"'.ssha_set_vsc_port.sh
-            #!/bin/bash
+                                FREE_PORT=$(find_free_port)
+                                echo $FREE_PORT
+                                mkdir -p /tmp/vscode_control/shell_wrappers
+                                cat <<END > /tmp/vscode_control/shell_wrappers/'"#{rand_id}"'.ssha_set_vsc_port.sh
+        #!/bin/bash
 
-            find_sshd_parent() {
-            local pid=\$\$
+        find_sshd_parent() {
+        local pid=\$\$
+        
+        while [ \$pid -gt 1 ]; do
+            # プロセス名を取得
+            local proc_name=\$(cat /proc/\$pid/comm 2>/dev/null)
             
-            while [ \$pid -gt 1 ]; do
-                # プロセス名を取得
-                local proc_name=\$(cat /proc/\$pid/comm 2>/dev/null)
-                
-                # sshdかチェック
-                if [[ "\$proc_name" == "sshd" ]]; then
-                echo \$pid
-                return 0
-                fi
-                
-                # 親プロセスIDを取得
-                pid=\$(awk '"'"'{print \$4}'"'"' /proc/\$pid/stat 2>/dev/null)
-                
-                if [ -z "\$pid" ]; then
-                return 1
-                fi
-            done
-            
-            return 1
-            }
-
-
-            export VSCODE_CONTROL_PORT=$FREE_PORT
-            SSHD_PID=\$(find_sshd_parent)
-            if [ -n "\$SSHD_PID" ]; then
-                INFO_DIR=/tmp/vscode_control/sshds/\$(awk '"'"'/btime/ {print \$2}'"'"' /proc/stat)
-                mkdir -p \$INFO_DIR
-                echo $FREE_PORT > \$INFO_DIR/\$(cat /proc/\$SSHD_PID/stat | awk '"'"'{print \$22}'"'"').\$SSHD_PID
+            # sshdかチェック
+            if [[ "\$proc_name" == "sshd" ]]; then
+            echo \$pid
+            return 0
             fi
+            
+            # 親プロセスIDを取得
+            pid=\$(awk '"'"'{print \$4}'"'"' /proc/\$pid/stat 2>/dev/null)
+            
+            if [ -z "\$pid" ]; then
+            return 1
+            fi
+        done
+        
+        return 1
+        }
 
-            exec $(getent passwd $USER | cut -d: -f7)            
-            END
-                                    chmod +x /tmp/vscode_control/shell_wrappers/'"#{rand_id}"'.ssha_set_vsc_port.sh
-                                ')
-                                io.close_write
-                            ensure
-                                free_port = io.read.chomp
-                                io.close
-                            end
+
+        export VSCODE_CONTROL_PORT=$FREE_PORT
+        SSHD_PID=\$(find_sshd_parent)
+        if [ -n "\$SSHD_PID" ]; then
+            INFO_DIR=/tmp/vscode_control/sshds/\$(awk '"'"'/btime/ {print \$2}'"'"' /proc/stat)
+            mkdir -p \$INFO_DIR
+            echo $FREE_PORT > \$INFO_DIR/\$(cat /proc/\$SSHD_PID/stat | awk '"'"'{print \$22}'"'"').\$SSHD_PID
+        fi
+
+        exec $(getent passwd $USER | cut -d: -f7)            
+        END
+                                chmod +x /tmp/vscode_control/shell_wrappers/'"#{rand_id}"'.ssha_set_vsc_port.sh
+                            ')
+                            io.close_write
+                        ensure
+                            free_port = io.read.chomp
+                            io.close
                         end
-                        if vport != 0
+                    end
+                    if vport != 0
+                        if print_tmp_script_file_name
+                            proxyBat = "#{WTMPDL}/ssh_proxy.bat"
+                            IO.write proxyBat, <<~END
+                                @echo off
+                                set SSH_ASKPASS=c:\\Program Files\\Git\\mingw64\\bin\\git-askpass.exe
+                                set SSH_ASKPASS_REQUIRE=force
+                                ssh.exe -F "#{WTMPDW}\\config" -oAddKeysToAgent=yes #{dest}
+                            END
+                            puts `wslpath -w #{proxyBat}`.chomp
+                            STDOUT.flush
+                        else
+                            do_ssh "ssh", "-R#{free_port}:127.0.0.1:#{vport}", "-oExitOnForwardFailure=yes", "-oAddKeysToAgent=yes", *ARGV, "-t", "/tmp/vscode_control/shell_wrappers/#{rand_id}.ssha_set_vsc_port.sh"
+                        end
+                    else
+                        STDERR.puts "ERROR: cannot find VSCode Control Server port."
+                        exit 1
+                    end
+                else
+                    # cmdarrの前に標準出力に乱数を書き出すコマンドを追加、ローカルでこの乱数を検出することで、接続の成功を確認してconfigに登録する
+                    case SSH_ORG
+                    when "ssh"
+                        cmdline = [SSH_ORG, *ARGV]
+                        if print_tmp_script_file_name && BY_SSH_BAT
+                            proxyScript = "#{WTMPDL}/ssh_proxy.sh"
+                            IO.write proxyScript, <<~END
+                                #!/bin/bash
+                                #{cmdline.shelljoin}    
+                            END
+                            puts proxyScript
+                            STDOUT.flush
+                        else
+                            exec SSH_ORG, "-oAddKeysToAgent=yes", *ARGV
+                        end
+                    when "ssh.exe"
+                        proxyBat = "#{WTMPDL}/ssh_proxy.bat"
+                        begin
+                            IO.write proxyBat, <<~END
+                                @echo off
+                                set SSH_ASKPASS=c:\\Program Files\\Git\\mingw64\\bin\\git-askpass.exe
+                                set SSH_ASKPASS_REQUIRE=force
+                                ssh.exe -F "#{WTMPDW}\\config" -oAddKeysToAgent=yes #{dest} #{cmdarr.map{ |e| e.include?(" ") ? "\"#{e}\"" : e }.join(" ")}
+                            END
                             if print_tmp_script_file_name
-                                proxyBat = "#{WTMPDL}/ssh_proxy.bat"
-                                IO.write proxyBat, <<~END
-                                    @echo off
-                                    set SSH_ASKPASS=c:\\Program Files\\Git\\mingw64\\bin\\git-askpass.exe
-                                    set SSH_ASKPASS_REQUIRE=force
-                                    ssh.exe -F "#{WTMPDW}\\config" -oAddKeysToAgent=yes #{dest}
-                                END
                                 puts `wslpath -w #{proxyBat}`.chomp
                                 STDOUT.flush
                             else
-                                do_ssh "ssh.org", "-R#{free_port}:127.0.0.1:#{vport}", "-oExitOnForwardFailure=yes", "-oAddKeysToAgent=yes", *ARGV, "-t", "/tmp/vscode_control/shell_wrappers/#{rand_id}.ssha_set_vsc_port.sh"
+                                exec "/mnt/c/Program Files/Git/usr/bin/winpty.exe", "-Xallow-non-tty", `wslpath -w #{proxyBat}`.chomp
                             end
-                        else
-                            STDERR.puts "ERROR: cannot find VSCode Control Server port."
-                            exit 1
-                        end
-                    else
-                        # cmdarrの前に標準出力に乱数を書き出すコマンドを追加、ローカルでこの乱数を検出することで、接続の成功を確認してconfigに登録する
-                        case SSH_ORG
-                        when "ssh.org"
-                            cmdline = [SSH_ORG, *ARGV]
-                            if print_tmp_script_file_name && BY_SSH_BAT
-                                proxyScript = "#{WTMPDL}/ssh_proxy.sh"
-                                IO.write proxyScript, <<~END
-                                    #!/bin/bash
-                                    #{cmdline.shelljoin}    
-                                END
-                                puts proxyScript
-                                STDOUT.flush
-                            else
-                                exec SSH_ORG, "-oAddKeysToAgent=yes", *ARGV
-                            end
-                        when "ssh.exe"
-                            proxyBat = "#{WTMPDL}/ssh_proxy.bat"
-                            begin
-                                IO.write proxyBat, <<~END
-                                    @echo off
-                                    set SSH_ASKPASS=c:\\Program Files\\Git\\mingw64\\bin\\git-askpass.exe
-                                    set SSH_ASKPASS_REQUIRE=force
-                                    ssh.exe -F "#{WTMPDW}\\config" -oAddKeysToAgent=yes #{dest} #{cmdarr.map{ |e| e.include?(" ") ? "\"#{e}\"" : e }.join(" ")}
-                                END
-                                if print_tmp_script_file_name
-                                    puts `wslpath -w #{proxyBat}`.chomp
-                                    STDOUT.flush
-                                else
-                                    exec "/mnt/c/Program Files/Git/usr/bin/winpty.exe", "-Xallow-non-tty", `wslpath -w #{proxyBat}`.chomp
-                                end
-                            ensure
-                                #FileUtils.rm_f proxyBat
-                            end
+                        ensure
+                            #FileUtils.rm_f proxyBat
                         end
                     end
                 end

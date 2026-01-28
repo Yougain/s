@@ -4,7 +4,7 @@
 
 
 install winInputBox ssha2 c
-install ssha2.sh /usr/local/etc/yk_support_for_sh/profile.d/
+install ssha2.sh /usr/local/etc/yk_support_for_sh/profile.d
 
 
 

@@ -9,7 +9,7 @@ END << 'EOF'
 EOF
 
 scp() {
-    "$(command -v "scp")" -S /usr/local/bin/ssha2 "$@"
+    "`which scp`" -S /usr/local/bin/ssha2 "$@"
 }
 
 ssh(){

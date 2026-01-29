@@ -95,7 +95,7 @@ WTMPDL = "#{WTMP_ROOTL}/ssha-#{FPID}"
 
 FileUtils.mkdir_p TMPD
 FileUtils.mkdir_p WTMPDL
-WTMPDW = `wslpath -w '#{WTMPDL}'`.chomp rescue nil
+WTMPDW = IN_WSL ? (`wslpath -w '#{WTMPDL}' 2>/dev/null`.chomp rescue nil) : nil
 
 
 SESSION_ID = Process.getsid(0) # 現在のセッションIDを取得

@@ -1,6 +1,7 @@
-#!/bin/env bash
+#!/usr/bin/env bash
 
-. gy_support
+. $(dirname $0)/gyi
+
 
 
 install winInputBox ssha2 c

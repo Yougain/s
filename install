@@ -2,7 +2,7 @@
 
 . $(dirname $0)/gyi
 
-
+depends yk_support_for_sh
 
 install winInputBox ssha2 c
 install ssha2.sh /usr/local/lib/yk_support_for_sh

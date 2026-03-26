@@ -446,7 +446,7 @@ end
 
 
 def do_ssh *args
-
+    verbose = true if args.include? "-v"
     if KEY_CHECK_IN_ADVANCE
         exec *args
     else
@@ -524,6 +524,11 @@ def do_ssh *args
                                 begin
                                     printPos = residue.size
                                     data = residue + cdata
+                                    system "echo #{data.inspect} >> #{SSHA_HOME}/debug.log"
+                                    if verbose
+                                        STDERR.write data.gsub(/Error:.*\n|^.*disabled port forwarding/i) { "\e[31m#{$&}\e[0m" }
+                                        STDERR.flush
+                                    end
                                     case data
                                     when /Allocated port (\d+) for remote forward to 127.0.0.1:\d+/
                                         vport = $1
@@ -539,6 +544,11 @@ def do_ssh *args
                                             printPos = 0
                                         else
                                             data = $` + $'
+                                        end
+                                    when /Error:.*\n/i
+                                        if !verbose
+                                            STDERR.write "\e[31m#{$&}\e[0m"
+                                            STDERR.flush
                                         end
                                         # register config
                                     end
@@ -660,7 +670,8 @@ def main
                             optArgs[c] = $' != "" ? $' : ARGV.shift
                             break
                         else
-                            optArgs[c] = true
+                            optArgs[c] ||= 0
+                            optArgs[c] += 1
                         end
                     end
                     ARGV.shift
@@ -747,7 +758,7 @@ def main
                                 when "T"
                                     terminal = false
                                 when /^[#{sOpts}]$/
-                                        optLine.push "-#{c}"
+                                    optLine.push "-#{c}"
                                 when /^[#{aOpts}]$/
                                     optArg[curOpt = $&].push ""
                                 end
@@ -1180,7 +1191,12 @@ def main
                             puts `wslpath -w #{proxyBat}`.chomp
                             STDOUT.flush
                         else
-                            do_ssh "ssh", "-R#{free_port}:127.0.0.1:#{vport}", "-oExitOnForwardFailure=yes", "-oAddKeysToAgent=yes", *ARGV, "-t", "/tmp/vscode_control/shell_wrappers/#{rand_id}.ssha_set_vsc_port.sh"
+                            sshWithVerbose = ["ssh"]
+                            optLine.count("-v").times do
+                                sshWithVerbose << "-v"
+                            end
+                            cline = [*sshWithVerbose, "-R#{free_port}:127.0.0.1:#{vport}", "-oExitOnForwardFailure=yes", "-oAddKeysToAgent=yes", *ARGV, "-t", "/tmp/vscode_control/shell_wrappers/#{rand_id}.ssha_set_vsc_port.sh"]
+                            do_ssh *cline
                         end
                     else
                         STDERR.puts "ERROR: cannot find VSCode Control Server port."

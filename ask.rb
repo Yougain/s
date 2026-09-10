@@ -44,7 +44,7 @@ def setupIO
     if STDERR.tty?
         cout = STDERR
     else
-        Ctty && (cout = cin || (File.open(Ctty, 'r+') rescue nil))
+        Ctty && (cout = File.open(Ctty, 'r+') rescue nil)
     end
     [cin, cout]
 end

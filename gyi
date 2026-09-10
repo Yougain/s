@@ -1,7 +1,7 @@
 if [ -z "$NO_GYI" ]; then
 	set -e
 	if [  -z "`which gy_install`" ]; then
-		PKG_D="~/.tmp/downloads/yk_packages"
+		PKG_D="$HOME/.tmp/downloads/yk_packages"
 		THIS_P="$PKG_D/gy_support"
 		mkdir -p $PKG_D
 		git clone https://github.com/Yougain/gy_support.git "$THIS_P"

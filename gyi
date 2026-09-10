@@ -1,0 +1,17 @@
+if [ -z "$NO_GYI" ]; then
+	set -e
+	if [  -z "`which gy_install`" ]; then
+		PKG_D="~/.tmp/downloads/yk_packages"
+		THIS_P="$PKG_D/gy_support"
+		mkdir -p $PKG_D
+		git clone https://github.com/Yougain/gy_support.git "$THIS_P"
+		ln -sf /home/yougain/git_project/gy_support "$THIS_P"
+		echo "CAUTION: ~/.bashrc or ~/.zshrc has been modified. Please re-run this script after installation."
+		NO_GYI=1 . "$THIS_P"/install
+	else
+		. gy_install
+	fi
+fi
+
+
+

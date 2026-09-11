@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 echo s.install s0 ${BASH_SOURCE[0]}
+pwd
 echo s.install s1 ${BASH_SOURCE[1]}
 echo s.install s2 ${BASH_SOURCE[2]}
 echo s.install s3 ${BASH_SOURCE[3]}

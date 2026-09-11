@@ -113,20 +113,16 @@ class NewAgent
 	@@created = nil
 	def initialize arg = nil
 		if arg
-			p
 			r, w = IO.pipe
-
 			pid = Process.spawn(
 			 "/usr/bin/ssh-agent -s -a #{TMPD_S}/ssh-agent-sock",
 			 out: w, # 標準出力をパイプにリダイレクト
 			 err: w, # 標準エラーをパイプにリダイレクト
 			 close_others: true # 必要なファイルディスクリプタ以外を閉じる
 			)
-
 			w.close # 書き込み側を閉じる
 
 			r.each_line do |line|
-				p line
 				if line =~ /SSH_AUTH_SOCK=(.*?)(;|$)/
 					@sock = $1
 				end
@@ -138,19 +134,18 @@ class NewAgent
 			r.close # 読み取り側を閉じる
 
 			Process.wait(pid.to_i) # 子プロセスの終了を待つ
-
 			if !@sock || !@pid
 			   userPrompt :msg, "ERROR: cannot start ssh-agent."
 			   exit 1
+			else
+				STDERR.write "Agent pid #{@pid}\n"
 			end
 		end
 	end
 	def pid
-		p
 		@pid ||= self.class.created.pid
 	end
 	def sock
-		p
 		@sock ||= self.class.created.sock
 	end
 	def self.created

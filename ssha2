@@ -1535,7 +1535,6 @@ def main
 					end
 				end
 			end
-
 			# setting ENV for ssh-add
 			added = getKeyListInSSHAgent
 

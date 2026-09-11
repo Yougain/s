@@ -8,7 +8,7 @@ if [ -z "$NO_GYI" ]; then
 		(
 			NO_GYI=1 . "$THIS_P"/install
 		)
-		echo -e "\033[33mCAUTION: ~/.bashrc or ~/.zshrc has been modified. Please re-run this script after installation.\033[0m"
+		echo -e "\033[33mCAUTION: ~/.bashrc and/or ~/.zshrc has been modified. Please re-run this script after installation.\033[0m"
 	fi
 	. gy_install
 fi

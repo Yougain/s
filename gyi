@@ -9,14 +9,8 @@ if [ -z "$NO_GYI" ]; then
 		(
 			NO_GYI=1 . "$THIS_P"/install
 		)
-		echo 10000
-		. gy_install
-		echo 29999
-	else
-		echo 4321
-		. gy_install
-		echo 54321
 	fi
+	. gy_install
 fi
 
 

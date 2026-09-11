@@ -39,6 +39,7 @@ echo s.install s45 ${BASH_SOURCE[4]}
 echo s.install s55 ${BASH_SOURCE[5]}
 echo s.install s65 ${BASH_SOURCE[6]}
 echo s.install s75 ${BASH_SOURCE[7]}
+pwd
 echo finished s/install -5
 
 

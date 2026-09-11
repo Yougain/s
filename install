@@ -25,7 +25,9 @@ pwd
 . $(dirname $0)/gyi
 pwd
 echo -2
+pwd
 depends yk_support_for_sh
+pwd
 echo -3
 
 install winInputBox ssha2 c

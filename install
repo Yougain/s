@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
+
+show_stack() {
+    local i
+    for ((i = 0; i < ${#FUNCNAME[@]}; i++)); do
+        printf '#%d %s() at %s:%s\n' \
+            "$i" \
+            "${FUNCNAME[$i]:-main}" \
+            "${BASH_SOURCE[$i]:-}" \
+            "${BASH_LINENO[$i - 1]:-0}"
+    done
+}
+show_stack
+
 echo s.install s0 ${BASH_SOURCE[0]}
 pwd
 echo s.install s1 ${BASH_SOURCE[1]}

@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-
+echo s.install s0 ${BASH_SOURCE[0]}
+echo s.install s1 ${BASH_SOURCE[1]}
+echo s.install s2 ${BASH_SOURCE[2]}
+echo s.install s3 ${BASH_SOURCE[3]}
 . $(dirname $0)/gyi
-
+echo -2
 depends yk_support_for_sh
+echo -3
 
 install winInputBox ssha2 c
+echo -4
 install ssha2.sh /usr/local/lib/yk_support_for_sh
 install ssha2.sh /usr/local/etc/yk_support_for_sh/shrc.d
 

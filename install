@@ -16,6 +16,15 @@ install winInputBox ssha2 c
 echo -4
 install ssha2.sh /usr/local/lib/yk_support_for_sh
 install ssha2.sh /usr/local/etc/yk_support_for_sh/shrc.d
+
+echo s.install s05 ${BASH_SOURCE[0]}
+echo s.install s15 ${BASH_SOURCE[1]}
+echo s.install s25 ${BASH_SOURCE[2]}
+echo s.install s35 ${BASH_SOURCE[3]}
+echo s.install s45 ${BASH_SOURCE[4]}
+echo s.install s55 ${BASH_SOURCE[5]}
+echo s.install s65 ${BASH_SOURCE[6]}
+echo s.install s75 ${BASH_SOURCE[7]}
 echo finished s/install -5
 
 
